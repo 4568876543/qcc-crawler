@@ -10,10 +10,11 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 import config_changsha as config
 
 # 从配置获取常量
-CITY = config.CITY
+SEARCH_LOCATION = config.SEARCH_LOCATION
+DISTRICT_LEVEL = config.DISTRICT_LEVEL
 COMPANY_STATUS = config.COMPANY_STATUS
 MANUFACTURING_SUBCATEGORIES = config.MANUFACTURING_SUBCATEGORIES
-CHANGSHA_DISTRICTS = config.CHANGSHA_DISTRICTS
+DISTRICTS = config.DISTRICTS
 TIMEOUT = config.TIMEOUT
 RANDOM_DELAY_MIN = config.RANDOM_DELAY_MIN
 RANDOM_DELAY_MAX = config.RANDOM_DELAY_MAX
@@ -23,6 +24,7 @@ VERIFY_CONDITIONS_ON_RESUME = config.VERIFY_CONDITIONS_ON_RESUME
 # 动态获取输出目录和文件路径的函数
 get_output_dir = config.get_output_dir
 get_output_files = config.get_output_files
+get_user_input = config.get_user_input
 
 from utils.excel_utils import (
     create_excel_template,
@@ -50,14 +52,39 @@ COOKIE_FILE = "data/qcc_cookies.json"
 
 
 class ChangshaCrawler:
-    """长沙市制造业爬虫"""
-    
-    def __init__(self, use_existing_browser=False, cdp_url=None, output_dir=None):
+    """企查查行业搜索爬虫"""
+
+    def __init__(self, use_existing_browser=False, cdp_url=None, output_dir=None, user_config=None):
         self.browser = None
         self.page = None
         self.context = None
         self.playwright = None
         self.data = []
+
+        # 用户配置（如果未提供则使用默认配置）
+        if user_config is None:
+            self.user_config = {
+                "keyword": config.CRAWL_KEYWORD,
+                "search_location": config.SEARCH_LOCATION,
+                "district_level": config.DISTRICT_LEVEL,
+                "company_status": config.COMPANY_STATUS
+            }
+        else:
+            self.user_config = user_config
+            # 更新全局配置
+            config.CRAWL_KEYWORD = user_config["keyword"]
+            config.SEARCH_LOCATION = user_config["search_location"]
+            config.DISTRICT_LEVEL = user_config["district_level"]
+            config.COMPANY_STATUS = user_config["company_status"]
+
+        # 获取配置
+        self.search_location = self.user_config["search_location"]  # 搜索地区（如"湖南省"或"长沙市"）
+        self.district_level = self.user_config["district_level"]    # "province" 或 "city"
+        self.keyword = self.user_config["keyword"]
+        self.company_status = self.user_config["company_status"]
+
+        # 初始化下级地区列表（从页面动态获取）
+        self.districts = []
         
         # 初始化输出目录（如果未指定则创建新的）
         if output_dir:
@@ -306,7 +333,7 @@ class ChangshaCrawler:
             # 关闭可能出现的各种弹窗（广告、公告等）
             await self.close_popups()
             
-            self.log(f"第二步：输入{CITY}，点击查一下...")
+            self.log(f"第二步：输入{self.search_location}，点击查一下...")
             
             # 确保页面处于可操作状态
             await self.page.wait_for_timeout(1000)
@@ -315,7 +342,7 @@ class ChangshaCrawler:
             search_input = self.page.locator('input[placeholder*="企业"], input[placeholder*="搜索"], input[type="text"]').first
             await search_input.click()
             await search_input.fill("")
-            await search_input.fill(CITY)
+            await search_input.fill(self.search_location)
             await self.page.wait_for_timeout(500)
             
             # 点击搜索按钮
@@ -342,7 +369,7 @@ class ChangshaCrawler:
         """设置筛选条件"""
         try:
             self.log("第三步：设置筛选条件...")
-            
+
             # 勾选"地址"
             self.log("  勾选地址...")
             try:
@@ -352,7 +379,7 @@ class ChangshaCrawler:
                     await self.page.wait_for_timeout(500)
             except Exception as e:
                 self.log(f"  勾选地址失败: {e}")
-            
+
             # 点击"更多"展开省份地区
             self.log("  点击更多展开省份地区...")
             try:
@@ -362,35 +389,13 @@ class ChangshaCrawler:
                     await self.page.wait_for_timeout(1000)
             except Exception as e:
                 self.log(f"  点击更多失败: {e}")
-            
-            # 先点击湖南省（省份）
-            self.log("  点击湖南省...")
-            try:
-                # 等待省份列表加载
-                await self.page.wait_for_timeout(500)
-                # 点击湖南省
-                hunan_btn = self.page.locator('text=湖南省').first
-                if await hunan_btn.is_visible(timeout=3000):
-                    await hunan_btn.click()
-                    await self.page.wait_for_timeout(1000)
-                    self.log("  已选择湖南省")
-                else:
-                    self.log("  湖南省不可见，尝试其他方式")
-            except Exception as e:
-                self.log(f"  点击湖南省失败: {e}")
-            
-            # 再点击长沙市（城市）
-            self.log(f"  点击{CITY}...")
-            try:
-                # 等待城市列表加载
-                await self.page.wait_for_timeout(500)
-                city_btn = self.page.get_by_text(CITY).first
-                await city_btn.click()
-                await self.page.wait_for_timeout(1000)
-                self.log(f"  已选择{CITY}")
-            except Exception as e:
-                self.log(f"  点击{CITY}失败: {e}")
-            
+
+            # 使用改进的方法选择地区
+            success = await self.select_location()
+
+            if not success:
+                self.log("  ⚠️ 省份/城市选择可能失败，继续执行...")
+
             # 关闭地区选择面板（点击空白处或关闭按钮）
             try:
                 await self.page.keyboard.press("Escape")
@@ -400,7 +405,7 @@ class ChangshaCrawler:
                 await self.page.wait_for_timeout(500)
             except:
                 pass
-            
+
             # 点击登记状态下拉框 - 使用JavaScript绕过遮罩层
             self.log("  点击登记状态下拉框...")
             try:
@@ -419,16 +424,16 @@ class ChangshaCrawler:
                 self.log("  已展开登记状态选项")
             except Exception as e:
                 self.log(f"  点击登记状态失败: {e}")
-            
+
             # 勾选正常状态（存续/在业）- 使用JavaScript
-            self.log(f"  勾选{COMPANY_STATUS}...")
+            self.log(f"  勾选{self.company_status}...")
             try:
                 await self.page.wait_for_timeout(500)
                 # 使用JavaScript点击存续/在业选项
                 await self.page.evaluate(f'''() => {{
                     const elements = document.querySelectorAll('span, a, label, div');
                     for (const el of elements) {{
-                        if (el.textContent.includes('{COMPANY_STATUS}')) {{
+                        if (el.textContent.includes('{self.company_status}')) {{
                             el.click();
                             return true;
                         }}
@@ -436,9 +441,9 @@ class ChangshaCrawler:
                     return false;
                 }}''')
                 await self.page.wait_for_timeout(500)
-                self.log(f"  已选择{COMPANY_STATUS}")
+                self.log(f"  已选择{self.company_status}")
             except Exception as e:
-                self.log(f"  勾选{COMPANY_STATUS}失败: {e}")
+                self.log(f"  勾选{self.company_status}失败: {e}")
             
             # 缓存当前选择的条件
             await self.cache_current_conditions()
@@ -446,11 +451,126 @@ class ChangshaCrawler:
             await self.screenshot("step3_filters_set")
             
             return True
-            
+
         except Exception as e:
             self.log(f"设置筛选条件失败: {e}")
             return False
-    
+
+    async def select_location(self):
+        """
+        选择搜索地区 - 只需要选择一级
+
+        根据搜索层级：
+        - 省级（如湖南省）：选择省份后，查看该省下地级市分布
+        - 市级（如长沙市）：选择城市后，查看该市下区县分布
+        """
+        self.log(f"  搜索地区: {self.search_location}")
+        self.log(f"  搜索层级: {'省级' if self.district_level == 'province' else '市级'}")
+
+        # 提取地区名称（去掉"省"字）
+        location_name = self.search_location.replace("省", "").replace("市", "")
+
+        self.log(f"  地区名称: {location_name}")
+
+        # 等待地区列表加载
+        await self.page.wait_for_timeout(1000)
+
+        # ============================================================
+        # 策略1: 使用JavaScript点击（最可靠）
+        # ============================================================
+        self.log("  策略1: JavaScript点击地区...")
+        try:
+            click_result = await self.page.evaluate(f'''() => {{
+                // 查找包含地区文字的可点击元素
+                const allElements = document.querySelectorAll('a, span, div, label, li');
+                for (const el of allElements) {{
+                    const text = el.textContent.trim();
+                    if (text === '{self.search_location}' ||
+                        text === '{location_name}' ||
+                        text === '{location_name}省' ||
+                        text === '{location_name}市') {{
+                        // 检查元素是否可见
+                        const style = window.getComputedStyle(el);
+                        if (style.display !== 'none' && style.visibility !== 'hidden') {{
+                            el.click();
+                            return 'clicked:' + el.tagName + ':' + el.className;
+                        }}
+                    }}
+                }}
+                return null;
+            }}''')
+
+            if click_result and click_result.startswith('clicked'):
+                self.log(f"  策略1成功: {click_result}")
+                await self.page.wait_for_timeout(1500)
+            else:
+                self.log("  策略1未找到地区元素")
+        except Exception as e:
+            self.log(f"  策略1失败: {e}")
+
+        # 验证地区是否选择成功
+        location_selected = await self.verify_selection(self.search_location)
+        if location_selected:
+            self.log("  ✅ 地区选择成功")
+        else:
+            self.log("  ⚠️ 地区可能未选择成功，尝试备用方法...")
+
+            # 策略2: 使用Playwright直接点击
+            self.log("  策略2: Playwright点击地区...")
+            try:
+                selectors = [
+                    f'text="{self.search_location}"',
+                    f'text="{location_name}"',
+                    f'a:has-text("{location_name}")',
+                    f'span:has-text("{location_name}")',
+                ]
+                for selector in selectors:
+                    try:
+                        elem = self.page.locator(selector).first
+                        if await elem.is_visible(timeout=2000):
+                            await elem.click()
+                            self.log(f"  策略2成功: {selector}")
+                            await self.page.wait_for_timeout(1500)
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                self.log(f"  策略2失败: {e}")
+
+        # 最终验证
+        final_check = await self.verify_selection(self.search_location)
+        if final_check:
+            self.log("  ✅ 地区选择完成")
+            return True
+        else:
+            self.log("  ❌ 地区选择可能有问题，但继续执行...")
+            return True
+
+    async def verify_selection(self, text):
+        """
+        验证某个条件是否已被选择
+
+        Args:
+            text: 要验证的文字
+
+        Returns:
+            bool: 是否已选择
+        """
+        try:
+            # 检查已选条件区域是否包含该文字
+            result = await self.page.evaluate(f'''() => {{
+                const selectedAreas = document.querySelectorAll('.has-selected, .selected-conditions, [class*="selected"], .tag-list');
+                for (const area of selectedAreas) {{
+                    if (area.textContent.includes('{text}')) {{
+                        return true;
+                    }}
+                }}
+                return false;
+            }}''')
+            return result
+        except:
+            return False
+
     async def cache_current_conditions(self):
         """缓存当前选择的条件"""
         try:
@@ -459,8 +579,8 @@ class ChangshaCrawler:
                 conditions_text = await conditions_area.text_content()
                 conditions = {
                     'text': conditions_text,
-                    'city': CITY,
-                    'status': COMPANY_STATUS,
+                    'city': self.search_location,
+                    'status': self.company_status,
                     'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 self.task_manager.set_selected_conditions(conditions)
@@ -489,20 +609,20 @@ class ChangshaCrawler:
             checks_passed = 0
             total_checks = 3
             
-            # 检查城市（可能是"长沙市"或"长沙"）
-            if CITY in current_text or CITY.replace('市', '') in current_text:
+            # 检查地区
+            if self.search_location in current_text or self.search_location.replace('市', '') in current_text:
                 checks_passed += 1
-                self.log(f"[条件验证] ✅ 城市: {CITY}")
+                self.log(f"[条件验证] ✅ 地区: {self.search_location}")
             else:
-                self.log(f"[条件验证] ⚠️ 城市未明确显示: {CITY}")
+                self.log(f"[条件验证] ⚠️ 地区未明确显示: {self.search_location}")
                 # 城市不显示也继续，因为URL中可能已包含
             
             # 检查登记状态
-            if COMPANY_STATUS in current_text:
+            if self.company_status in current_text:
                 checks_passed += 1
-                self.log(f"[条件验证] ✅ 登记状态: {COMPANY_STATUS}")
+                self.log(f"[条件验证] ✅ 登记状态: {self.company_status}")
             else:
-                self.log(f"[条件验证] ⚠️ 登记状态未显示: {COMPANY_STATUS}")
+                self.log(f"[条件验证] ⚠️ 登记状态未显示: {self.company_status}")
             
             # 检查制造业
             if "制造业" in current_text or "行业" in current_text:
@@ -547,7 +667,44 @@ class ChangshaCrawler:
         except Exception as e:
             self.log(f"获取区县分布失败: {e}")
             return {}
-    
+
+    async def get_sub_districts_from_page(self):
+        """
+        从页面获取下级地区列表
+
+        在选择地区后，从页面中解析出下级地区列表
+        例如：选择湖南省后，获取长沙市、株洲市等地级市
+        """
+        try:
+            await self.page.wait_for_timeout(2000)
+            body_text = await self.page.text_content('body')
+
+            districts = []
+            # 匹配下级地区（地级市或区县）的正则
+            # 格式如：长沙市 (12345)、株洲市 (9876)
+            pattern = r'([\u4e00-\u9fa5]+(?:市|州|区|县))\s*[\(（]([\d,]+)[\)）]'
+            matches = re.findall(pattern, body_text)
+
+            for match in matches:
+                district_name = match[0]
+                # 排除一些干扰项
+                if district_name not in ['公司', '企业', '集团', '有限', '工程', '实业']:
+                    districts.append(district_name)
+
+            # 去重
+            districts = list(dict.fromkeys(districts))
+
+            if districts:
+                self.log(f"  解析到 {len(districts)} 个下级地区")
+                return districts
+            else:
+                self.log("  未能解析到下级地区")
+                return []
+
+        except Exception as e:
+            self.log(f"获取下级地区失败: {e}")
+            return []
+
     async def click_manufacturing(self):
         """点击制造业"""
         try:
@@ -793,16 +950,16 @@ class ChangshaCrawler:
             self.log("[新建会话] 初始化任务...")
             
             industries = dict(MANUFACTURING_SUBCATEGORIES)
-            districts = list(CHANGSHA_DISTRICTS)
+            districts = list(self.districts)
             
             self.task_manager.init_session(
-                city=CITY,
-                status_filter=COMPANY_STATUS,
+                city=self.search_location,
+                status_filter=self.company_status,
                 industries=industries,
                 districts=districts
             )
             
-            self.index_cache.set_city(CITY)
+            self.index_cache.set_city(self.search_location)
             self.index_cache.set_districts(districts)
             self.index_cache.set_industries(industries)
             
@@ -856,7 +1013,7 @@ class ChangshaCrawler:
                             industry_name, 
                             district_data, 
                             self.city_total_data, 
-                            CITY
+                            self.search_location
                         )
                         await self.screenshot(f"{industry_name}行业汇总表")
                         self.log(f"  行业明细表已保存并截图")
@@ -924,7 +1081,7 @@ class ChangshaCrawler:
                 # ====== 步骤1: 保存城市汇总表 + 截图 ======
                 self.log("保存城市汇总表...")
                 self.city_total_data = manufacturing_data  # 保存城市总数据供后续使用
-                save_city_summary_table(self.output_dir, manufacturing_data, CITY)
+                save_city_summary_table(self.output_dir, manufacturing_data, self.search_location)
                 await self.screenshot("城市汇总表")
                 self.log("  城市汇总表已保存并截图")
             
@@ -1092,7 +1249,7 @@ class ChangshaCrawler:
         """运行爬虫"""
         try:
             self.log("=" * 60)
-            self.log(f"{CITY}制造业企业数据爬虫启动")
+            self.log(f"{self.search_location}制造业企业数据爬虫启动")
             self.log("=" * 60)
             
             await self.init_browser()
@@ -1110,8 +1267,8 @@ class ChangshaCrawler:
             
             self.log("创建Excel文件...")
             create_excel_template(self.OUTPUT_FILE)
-            create_district_sheets(self.OUTPUT_FILE, CHANGSHA_DISTRICTS, MANUFACTURING_SUBCATEGORIES)
-            create_summary_sheet(self.OUTPUT_FILE, CHANGSHA_DISTRICTS, MANUFACTURING_SUBCATEGORIES)
+            create_district_sheets(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
+            create_summary_sheet(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
             
             if not await self.navigate_to_search():
                 return
@@ -1126,7 +1283,17 @@ class ChangshaCrawler:
                 if not await self.verify_conditions_on_resume():
                     self.log("❌ 条件验证失败，请手动检查筛选条件")
                     return
-            
+
+            # 从页面获取下级地区列表
+            self.log("获取下级地区列表...")
+            self.districts = await self.get_sub_districts_from_page()
+            if not self.districts:
+                self.log("⚠️ 未能获取下级地区，使用默认列表")
+                # 默认列表（省级使用常见地级市，市级使用常见区县）
+                self.districts = []
+            else:
+                self.log(f"  发现 {len(self.districts)} 个下级地区: {', '.join(self.districts[:5])}...")
+
             # 获取制造业汇总数据
             if not await self.crawl_all_industries():
                 return
@@ -1137,12 +1304,12 @@ class ChangshaCrawler:
             
             # ====== 步骤3: 所有行业完成后保存汇总明细表 ======
             self.log("保存汇总明细表...")
-            summary_file = save_summary_table(self.output_dir, self.data, CITY)
+            summary_file = save_summary_table(self.output_dir, self.data, self.search_location)
             self.log(f"  汇总明细表已保存: {summary_file}")
             
             self.log("更新Excel汇总表...")
             update_summary_sheet(self.OUTPUT_FILE, self.data)
-            update_all_district_sheets(self.OUTPUT_FILE, self.data, CHANGSHA_DISTRICTS, MANUFACTURING_SUBCATEGORIES)
+            update_all_district_sheets(self.OUTPUT_FILE, self.data, self.districts, MANUFACTURING_SUBCATEGORIES)
             
             # ====== 步骤4: 数据验证（城市汇总表 vs 汇总明细表） ======
             self.log("=" * 60)
@@ -1189,9 +1356,9 @@ class ChangshaCrawler:
             self.log("=" * 60)
             self.log(f"爬取完成！共获取 {len(self.data)} 条数据")
             self.log(f"输出目录: {self.output_dir}")
-            self.log(f"  - 城市汇总表: 行业明细表/00_{CITY}市制造业总表.xlsx")
+            self.log(f"  - 地区汇总表: 行业明细表/00_{self.search_location}制造业总表.xlsx")
             self.log(f"  - 行业明细表: 行业明细表/*.xlsx (31个文件)")
-            self.log(f"  - 汇总明细表: {CITY}制造业企业数量明细表.xlsx")
+            self.log(f"  - 汇总明细表: {self.search_location}制造业企业数量明细表.xlsx")
             self.log("=" * 60)
             
             return True  # 成功完成
@@ -1225,55 +1392,90 @@ class ChangshaCrawler:
 
 async def run_with_retry(max_retries: int = 10, retry_delay: int = 30):
     """带自动重试的运行函数
-    
+
     Args:
         max_retries: 最大重试次数
         retry_delay: 重试间隔(秒)
     """
     retry_count = 0
     output_dir = None  # 保存输出目录，确保重试时使用同一个目录
-    
-    # 首先检查是否有未完成的目录
+    user_config = None  # 保存用户配置
+
+    # ============================================================
+    # 获取用户输入配置
+    # ============================================================
+    print("\n" + "=" * 60)
+    print("企查查行业搜索爬虫")
+    print("=" * 60)
+    print()
+
+    # 获取用户输入
+    user_input = get_user_input()
+    user_config = user_input
+
+    # 根据用户输入更新全局配置
+    config.CRAWL_KEYWORD = user_config["keyword"]
+    config.SEARCH_LOCATION = user_config["search_location"]
+    config.DISTRICT_LEVEL = user_config["district_level"]
+    config.COMPANY_STATUS = user_config["company_status"]
+
+    # 下级地区会在程序运行时从页面动态获取
+    print(f"  搜索地区: {user_config['search_location']}")
+    print(f"  搜索层级: {'省级（查看地级市分布）' if user_config['district_level'] == 'province' else '市级（查看区县分布）'}")
+    print()
+
+    # ============================================================
+    # 检查是否有未完成的目录
+    # ============================================================
     from config_changsha import find_latest_incomplete_dir
     existing_dir = find_latest_incomplete_dir()
     if existing_dir:
         print(f"\n发现未完成的爬取目录: {existing_dir}")
-        output_dir = existing_dir
-    
+        resume = input("是否继续上次的爬取? (Y/n): ").strip().lower()
+        if resume == 'n':
+            output_dir = None
+            user_input["keyword"] = input("请输入新的关键字（直接回车使用原关键字）: ").strip()
+            if user_input["keyword"]:
+                user_config["keyword"] = user_input["keyword"]
+                config.CRAWL_KEYWORD = user_config["keyword"]
+        else:
+            output_dir = existing_dir
+
     while retry_count < max_retries:
         retry_count += 1
-        
+
         print(f"\n{'=' * 60}")
         print(f"第 {retry_count}/{max_retries} 次运行")
         print(f"{'=' * 60}\n")
-        
+
         # 如果已有输出目录，继续使用同一个目录续爬
-        crawler = ChangshaCrawler(output_dir=output_dir)
+        # 传递用户配置给爬虫
+        crawler = ChangshaCrawler(output_dir=output_dir, user_config=user_config)
         if output_dir is None:
             output_dir = crawler.output_dir  # 保存第一次创建的目录
         success = await crawler.run()
-        
+
         if success:
             print("\n✅ 爬取成功完成!")
-            
+
             # 检查是否有可疑数据
             suspicious_file = os.path.join(output_dir, "suspicious_data.json")
             if os.path.exists(suspicious_file):
                 print("\n⚠️ 存在需要人工核实的数据,请查看:")
                 print(f"   {suspicious_file}")
-            
+
             return True
         else:
             print(f"\n❌ 运行失败,将在 {retry_delay} 秒后重试...")
             print(f"   输出目录: {output_dir}")
-            
+
             if retry_count < max_retries:
                 import time
                 time.sleep(retry_delay)
             else:
                 print(f"\n❌ 已达到最大重试次数 ({max_retries}),停止运行")
                 return False
-    
+
     return False
 
 
