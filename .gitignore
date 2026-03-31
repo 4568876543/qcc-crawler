@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Playwright
+chongqing_manufacturing_crawler/data/browser_profile/
+chongqing_manufacturing_crawler/data/qcc_cookies.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+temp_data.json
+task_state.json
+
+# Data files (keep structure but ignore large data)
+chongqing_manufacturing_crawler/data/crawl_results/
+chongqing_manufacturing_crawler/data/*.xlsx
+
+# Backup
+backup_v1/
