@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企查查行业搜索爬虫 - 项目介绍</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8;
+            color: #333;
+            background: #f5f7fa;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            border-radius: 16px;
+            margin-bottom: 40px;
+            text-align: center;
+        }
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+        }
+        .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        .badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin: 5px;
+            font-size: 0.9em;
+        }
+        section {
+            background: white;
+            border-radius: 12px;
+            padding: 30px 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        h2 {
+            color: #667eea;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        h3 {
+            color: #764ba2;
+            font-size: 1.3em;
+            margin: 25px 0 15px;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        ul, ol {
+            margin-left: 25px;
+            margin-bottom: 20px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        code {
+            background: #f4f5f7;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: "SF Mono", Monaco, Consolas, monospace;
+            font-size: 0.9em;
+            color: #e83e8c;
+        }
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-size: 0.85em;
+        }
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .feature-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);
+            padding: 25px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        .feature-card h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        .feature-card p {
+            color: #666;
+            font-size: 0.95em;
+            margin: 0;
+        }
+        .highlight {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: bold;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 15px 0;
+        }
+        .warning-title {
+            color: #856404;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .success {
+            background: #d4edda;
+            border: 1px solid #28a745;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 15px 0;
+        }
+        .tech-stack {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .tech-tag {
+            background: #e7e9f0;
+            color: #667eea;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+        .flow-step {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .step-number {
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        .step-content {
+            flex: 1;
+        }
+        .step-title {
+            font-weight: bold;
+            color: #333;
+        }
+        .step-desc {
+            font-size: 0.9em;
+            color: #666;
+        }
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+            font-size: 0.9em;
+        }
+        @media (max-width: 768px) {
+            header {
+                padding: 40px 20px;
+            }
+            h1 {
+                font-size: 1.8em;
+            }
+            section {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>企查查行业搜索爬虫</h1>
+            <p class="subtitle">基于 Playwright 的智能数据采集解决方案</p>
+            <div class="badge">Playwright</div>
+            <div class="badge">Python</div>
+            <div class="badge">断点续爬</div>
+            <div class="badge">数据校验</div>
+        </header>
+
+        <section>
+            <h2>📖 项目简介</h2>
+            <p>企查查行业搜索爬虫是一个基于 <span class="highlight">Playwright</span> 的智能数据采集工具，用于从企查查网站爬取制造业各细分行业在各区县的<span class="highlight">企业数量分布数据</span>。</p>
+            <p>适用于经济分析、产业研究、市场调研等场景，帮助用户快速获取区域产业布局信息。</p>
+
+            <h3>核心价值</h3>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>🚀 自动化采集</h4>
+                    <p>全自动流程，从登录到数据输出无需人工干预</p>
+                </div>
+                <div class="feature-card">
+                    <h4>💾 断点续爬</h4>
+                    <p>程序中断后可从上次位置继续，数据不丢失</p>
+                </div>
+                <div class="feature-card">
+                    <h4>✅ 数据校验</h4>
+                    <p>自动检测异常数据，确保数据准确性</p>
+                </div>
+                <div class="feature-card">
+                    <h4>📊 多维输出</h4>
+                    <p>城市汇总、行业明细、执行进度一目了然</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>🛠️ 技术栈</h2>
+            <div class="tech-stack">
+                <span class="tech-tag">Python 3</span>
+                <span class="tech-tag">Playwright</span>
+                <span class="tech-tag">pandas</span>
+                <span class="tech-tag">openpyxl</span>
+                <span class="tech-tag">asyncio</span>
+                <span class="tech-tag">JSON</span>
+            </div>
+            <h3>关键技术点</h3>
+            <ul>
+                <li><strong>Playwright 异步 API</strong>：高效的浏览器自动化控制</li>
+                <li><strong>Cookie 持久化</strong>：登录状态自动保存，无需重复扫码</li>
+                <li><strong>任务状态管理</strong>：JSON 文件存储任务进度，支持精确续爬</li>
+                <li><strong>数据一致性校验</strong>：城市汇总 vs 细分行业交叉验证</li>
+                <li><strong>异常自动重试</strong>：行业选择失败自动重试机制</li>
+                <li><strong>实时进度监控</strong>：Excel 内置执行进度表</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>📱 功能特点</h2>
+
+            <h3>1. 智能登录</h3>
+            <p>支持扫码登录和 Cookie 自动持久化，首次登录后自动保存凭证，后续运行无需重复登录。</p>
+
+            <h3>2. 断点续爬</h3>
+            <p>程序采用 JSON 文件存储任务状态，包含：</p>
+            <ul>
+                <li><code>task_state.json</code> - 任务进度状态</li>
+                <li><code>temp_data.json</code> - 临时数据缓存</li>
+                <li><code>qcc_cookies.json</code> - 登录凭证</li>
+            </ul>
+
+            <h3>3. 数据校验机制</h3>
+            <div class="warning">
+                <div class="warning-title">⚠️ 关键设计</div>
+                <p>如果某行业数据 > 制造业合计的 90%，系统判定为异常，自动重试行业选择。这是防止"行业选择未生效"导致的数据错误。</p>
+            </div>
+
+            <h3>4. 筛选条件验证</h3>
+            <p>在爬取前自动验证三个关键筛选条件：</p>
+            <ul>
+                <li>✅ 地区是否正确选择</li>
+                <li>✅ 登记状态是否勾选</li>
+                <li>✅ 制造业行业是否点击</li>
+            </ul>
+
+            <h3>5. 执行进度监控</h3>
+            <p>Excel 文件第一个工作表实时显示：</p>
+            <ul>
+                <li>总行业数、已完成、进行中、待处理、失败数量</li>
+                <li>所有行业的状态（颜色区分）</li>
+                <li>待爬取行业列表（橙色标注）</li>
+                <li>失败行业列表（红色标注）</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>🔄 工作流程</h2>
+
+            <div class="flow-step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <div class="step-title">初始化浏览器</div>
+                    <div class="step-desc">加载 Cookie 或扫码登录，检查登录状态</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <div class="step-title">设置筛选条件</div>
+                    <div class="step-desc">地区 + 登记状态（存续）+ 制造业</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <div class="step-title">验证筛选条件</div>
+                    <div class="step-desc">确认地区/状态/行业都已正确设置，否则报错退出</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <div class="step-title">爬取城市汇总</div>
+                    <div class="step-desc">获取制造业在各区县的合计数据</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-number">5</div>
+                <div class="step-content">
+                    <div class="step-title">遍历细分行业</div>
+                    <div class="step-desc">逐个点击31个细分行业，获取各区县数据（自动校验+重试）</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-number">6</div>
+                <div class="step-content">
+                    <div class="step-title">保存与验证</div>
+                    <div class="step-desc">生成Excel、截图，数据一致性验证</div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>📁 输出文件</h2>
+
+            <h3>Excel 文件结构</h3>
+            <pre><code>Sheet1: 执行进度
+├── 筛选条件信息
+├── 统计摘要（已完成/待处理/失败）
+└── 行业列表（状态颜色区分）
+
+Sheet2: 明细数据
+├── 区县 | 行业代码 | 行业名称 | 企业数量
+└── 按区县和行业代码排序
+
+Sheet3: 区县汇总
+└── 各区县企业总数
+
+Sheet4: 行业汇总
+└── 各行业企业总数</code></pre>
+
+            <h3>行业明细表目录</h3>
+            <p>每个行业单独保存一张明细表：</p>
+            <pre><code>行业明细表/
+├── 00_长沙市制造业总表.xlsx      # 城市汇总
+├── 13_农副食品加工业.xlsx
+├── 14_食品制造业.xlsx
+├── ...
+└── 43_金属制品、机械和设备修理业.xlsx</code></pre>
+
+            <h3>表格元数据</h3>
+            <p>每个Excel文件都包含筛选条件信息：</p>
+            <pre><code>第1行: 筛选条件: 地区=湖南省 | 登记状态=存续 | 行业=制造业
+第2行: 生成时间: 2026-04-01 14:30:00
+第3行: [标题]</code></pre>
+        </section>
+
+        <section>
+            <h2>⚠️ 常见问题</h2>
+
+            <h3>1. 登录失败</h3>
+            <p><strong>解决</strong>：删除 <code>data/qcc_cookies.json</code>，重新扫码登录</p>
+
+            <h3>2. 行业选择未生效</h3>
+            <p><strong>现象</strong>：某行业数据接近制造业合计（异常）</p>
+            <p><strong>解决</strong>：程序已自动重试，检查截图 <code>WARNING_*_data_anomaly.png</code></p>
+
+            <h3>3. 筛选条件验证失败</h3>
+            <p><strong>解决</strong>：检查 <code>logs/screenshots/FILTER_VERIFICATION_FAILED.png</code>，确保页面正常加载</p>
+
+            <h3>4. 断点续爬失效</h3>
+            <p><strong>解决</strong>：检查 <code>data/task_state.json</code> 和 <code>temp_data.json</code> 是否存在且完整</p>
+
+            <div class="success">
+                <strong>💡 提示</strong>：定期查看 <code>logs/changsha_crawler.log</code> 了解程序运行状态
+            </div>
+        </section>
+
+        <section>
+            <h2>🚀 快速开始</h2>
+
+            <h3>1. 安装依赖</h3>
+            <pre><code>pip install playwright pandas openpyxl
+playwright install chromium</code></pre>
+
+            <h3>2. 运行程序</h3>
+            <pre><code>python3 test_run.py</code></pre>
+
+            <h3>3. 数据核实</h3>
+            <pre><code>python3 data_verification.py data/输出目录</code></pre>
+        </section>
+
+        <section>
+            <h2>📊 数据质量保障</h2>
+
+            <p>程序通过多重机制保障数据质量：</p>
+
+            <ul>
+                <li><strong>行业选择验证</strong>：点击后检查页面状态，确保选择生效</li>
+                <li><strong>数据合理性校验</strong>：单项数据不超过合计的90%</li>
+                <li><strong>交叉验证</strong>：城市汇总 vs 细分行业明细对比</li>
+                <li><strong>截图留痕</strong>：每个关键步骤都有截图存档</li>
+                <li><strong>临时数据持久化</strong>：每完成一个行业立即保存</li>
+            </ul>
+
+            <div class="success">
+                <strong>✅ 质量标准</strong>：城市汇总与细分行业明细差异 &lt; 2% 视为合格
+            </div>
+        </section>
+
+        <footer>
+            <p>企查查行业搜索爬虫 · 最后更新：2026-04-01</p>
+            <p>基于 Playwright + Python 构建 · 支持断点续爬和数据校验</p>
+        </footer>
+    </div>
+</body>
+</html>
