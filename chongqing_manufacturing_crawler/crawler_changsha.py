@@ -1044,53 +1044,22 @@ class ChangshaCrawler:
             self.log("  等待页面刷新下级地区列表...")
             await self.page.wait_for_timeout(3000)
 
-            # 优先尝试从搜索结果区域获取下级地区
-            # 企查查通常在左侧或顶部显示筛选后的地区分布
+            body_text = await self.page.text_content('body')
+
             districts = []
+            # 匹配下级地区（地级市或区县）的正则
+            # 格式如：长沙市 (12345)、岳麓区 (5678)
+            pattern = r'([\u4e00-\u9fa5]+(?:市|州|区|县))\s*[\(（]([\d,]+)[\)）]'
+            matches = re.findall(pattern, body_text)
 
-            # 方法1：尝试查找地区分布元素
-            try:
-                # 查找包含地区和数量的元素（格式：地区名 (数量)）
-                area_elements = await self.page.query_selector_all(
-                    '.search-result__province, .province-item, [class*="province"], '
-                    '.filter-tag, .area-tag, [class*="area"]'
-                )
-                for elem in area_elements:
-                    try:
-                        text = await elem.text_content()
-                        if text:
-                            # 匹配格式：长沙市 (12345)
-                            match = re.search(r'([\u4e00-\u9fa5]+(?:市|州|区|县))\s*[\(（](\d+)[\)）]', text)
-                            if match:
-                                name = match.group(1)
-                                if name not in ['公司', '企业', '集团', '有限', '工程', '实业']:
-                                    districts.append(name)
-                    except:
-                        pass
-            except:
-                pass
-
-            # 方法2：如果方法1没找到，尝试从整个页面文本中查找
-            if not districts:
-                body_text = await self.page.text_content('body')
-                # 匹配下级地区（地级市或区县）的正则
-                # 格式如：长沙市 (12345)、岳麓区 (5678)
-                pattern = r'([\u4e00-\u9fa5]+(?:市|州|区|县))\s*[\(（]([\d,]+)[\)）]'
-                matches = re.findall(pattern, body_text)
-
-                for match in matches:
-                    district_name = match[0]
-                    # 排除一些干扰项
-                    if district_name not in ['公司', '企业', '集团', '有限', '工程', '实业']:
-                        # 排除直辖市和省份名称
-                        if district_name not in ['北京市', '天津市', '上海市', '重庆市', '香港', '澳门']:
-                            districts.append(district_name)
+            for match in matches:
+                district_name = match[0]
+                # 排除一些干扰项
+                if district_name not in ['公司', '企业', '集团', '有限', '工程', '实业']:
+                    districts.append(district_name)
 
             # 去重
             districts = list(dict.fromkeys(districts))
-
-            # 过滤：只保留看起来像区县/市名称的（长度2-6个汉字）
-            districts = [d for d in districts if 2 <= len(d) <= 6]
 
             if districts:
                 self.log(f"  解析到 {len(districts)} 个下级地区")
