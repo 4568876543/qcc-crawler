@@ -64,6 +64,11 @@
             font-size: 1.3em;
             margin: 25px 0 15px;
         }
+        h4 {
+            color: #555;
+            font-size: 1.1em;
+            margin: 20px 0 10px;
+        }
         p {
             margin-bottom: 15px;
         }
@@ -95,6 +100,20 @@
             background: none;
             color: inherit;
             padding: 0;
+        }
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+        .code-header {
+            background: #e9ecef;
+            padding: 8px 15px;
+            font-weight: bold;
+            color: #495057;
+            font-size: 0.9em;
         }
         .feature-grid {
             display: grid;
@@ -188,11 +207,45 @@
             font-size: 0.9em;
             color: #666;
         }
+        .arch-diagram {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 15px 0;
+            text-align: center;
+        }
+        .arch-box {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 8px;
+            margin: 5px;
+            font-weight: bold;
+        }
+        .arch-arrow {
+            display: block;
+            color: #667eea;
+            font-size: 1.5em;
+            margin: 5px 0;
+        }
         footer {
             text-align: center;
             padding: 30px;
             color: #999;
             font-size: 0.9em;
+        }
+        .comment {
+            color: #6a9955;
+        }
+        .keyword {
+            color: #569cd6;
+        }
+        .string {
+            color: #ce9178;
+        }
+        .function {
+            color: #dcdcaa;
         }
         @media (max-width: 768px) {
             header {
@@ -245,6 +298,34 @@
         </section>
 
         <section>
+            <h2>🏗️ 系统架构</h2>
+
+            <div class="arch-diagram">
+                <div class="arch-box">用户输入</div>
+                <span class="arch-arrow">↓</span>
+                <div class="arch-box">配置加载</div>
+                <span class="arch-arrow">↓</span>
+                <div class="arch-box">浏览器自动化</div>
+                <span class="arch-arrow">↓</span>
+                <div class="arch-box">数据采集</div>
+                <span class="arch-arrow">↓</span>
+                <div class="arch-box">Excel输出</div>
+            </div>
+
+            <h3>模块划分</h3>
+            <pre><code>chongqing_manufacturing_crawler/
+├── crawler_changsha.py       # 主爬虫类 (ChangshaCrawler)
+├── config_changsha.py        # 配置模块
+├── utils/
+│   ├── excel_utils.py       # Excel 操作
+│   ├── data_utils.py         # 数据处理
+│   ├── task_manager.py       # 任务状态管理
+│   ├── index_cache.py        # 索引缓存
+│   └── data_validator.py     # 数据验证
+└── data/                    # 数据存储</code></pre>
+        </section>
+
+        <section>
             <h2>🛠️ 技术栈</h2>
             <div class="tech-stack">
                 <span class="tech-tag">Python 3</span>
@@ -263,6 +344,148 @@
                 <li><strong>异常自动重试</strong>：行业选择失败自动重试机制</li>
                 <li><strong>实时进度监控</strong>：Excel 内置执行进度表</li>
             </ul>
+        </section>
+
+        <section>
+            <h2>💻 核心代码讲解</h2>
+
+            <h3>1. 主类初始化</h3>
+            <div class="code-block">
+                <div class="code-header">crawler_changsha.py - ChangshaCrawler 类</div>
+                <pre><code><span class="keyword">class</span> <span class="function">ChangshaCrawler</span>:
+    <span class="keyword">def</span> <span class="function">__init__</span>(<span class="keyword">self</span>, ...):
+        <span class="keyword">self</span>.browser = <span class="keyword">None</span>
+        <span class="keyword">self</span>.page = <span class="keyword">None</span>
+        <span class="keyword">self</span>.context = <span class="keyword">None</span>
+        <span class="keyword">self</span>.data = []  <span class="comment"># 存储爬取的数据</span>
+        <span class="keyword">self</span>.task_manager = TaskManager(task_file)
+        <span class="comment"># 从配置文件加载用户设置</span>
+        <span class="keyword">self</span>.search_location = user_config[<span class="string">"search_location"</span>]
+        <span class="keyword">self</span>.company_status = user_config[<span class="string">"company_status"</span>]</code></pre>
+            </div>
+
+            <h3>2. Cookie 持久化登录</h3>
+            <div class="code-block">
+                <div class="code-header">自动保存和加载 Cookie</div>
+                <pre><code><span class="keyword">async def</span> <span class="function">init_browser</span>(<span class="keyword">self</span>):
+    <span class="comment"># 尝试加载已保存的 Cookie</span>
+    <span class="keyword">if</span> os.path.exists(COOKIE_FILE):
+        <span class="keyword">with</span> <span class="function">open</span>(COOKIE_FILE, <span class="string">'r'</span>) <span class="keyword">as</span> f:
+            cookies = json.load(f)
+        <span class="keyword">await</span> <span class="keyword">self</span>.context.add_cookies(cookies)
+
+    <span class="comment"># 检查登录状态</span>
+    <span class="keyword">if</span> <span class="keyword">await</span> <span class="keyword">self</span>.<span class="function">check_login</span>():
+        <span class="keyword">return</span> <span class="keyword">True</span>
+
+    <span class="comment"># 未登录，等待用户扫码</span>
+    <span class="keyword">await</span> <span class="keyword">self</span>.<span class="function">wait_for_login</span>()
+
+<span class="keyword">async def</span> <span class="function">save_cookies</span>(<span class="keyword">self</span>):
+    cookies = <span class="keyword">await</span> <span class="keyword">self</span>.context.cookies()
+    <span class="keyword">with</span> <span class="function">open</span>(COOKIE_FILE, <span class="string">'w'</span>) <span class="keyword">as</span> f:
+        json.dump(cookies, f)  <span class="comment"># 保存到文件</span></code></pre>
+            </div>
+
+            <h3>3. 断点续爬核心 - 任务状态管理</h3>
+            <div class="code-block">
+                <div class="code-header">utils/task_manager.py - 任务状态持久化</div>
+                <pre><code><span class="keyword">class</span> <span class="function">TaskManager</span>:
+    <span class="keyword">def</span> <span class="function">_load</span>(<span class="keyword">self</span>):
+        <span class="comment"># 从磁盘加载任务状态</span>
+        <span class="keyword">with</span> <span class="function">open</span>(<span class="keyword">self</span>.task_file, <span class="string">'r'</span>) <span class="keyword">as</span> f:
+            data = json.load(f)
+        <span class="keyword">self</span>.session = <span class="function">CrawlSession</span>(**data[<span class="string">'session'</span>])
+        <span class="keyword">self</span>.industry_tasks = {
+            code: <span class="function">IndustryTask</span>(**task)
+            <span class="keyword">for</span> code, task <span class="keyword">in</span> data[<span class="string">'industry_tasks'</span>].items()
+        }
+
+    <span class="keyword">def</span> <span class="function">get_pending_industries</span>(<span class="keyword">self</span>):
+        <span class="comment"># 获取待处理行业（包括中断后未完成的）</span>
+        <span class="keyword">return</span> [t <span class="keyword">for</span> t <span class="keyword">in</span> <span class="keyword">self</span>.industry_tasks.values()
+                <span class="keyword">if</span> t.status <span class="keyword">in</span> [PENDING, FAILED, IN_PROGRESS]]
+
+    <span class="keyword">def</span> <span class="function">complete_industry</span>(<span class="keyword">self</span>, code, district_count, count):
+        <span class="keyword">self</span>.industry_tasks[code].status = COMPLETED
+        <span class="keyword">self</span>.industry_tasks[code].enterprise_count = count
+        <span class="keyword">self</span>.<span class="function">save</span>()  <span class="comment"># 持久化到磁盘</span></code></pre>
+            </div>
+
+            <h3>4. 数据校验 - 防止行业选择未生效</h3>
+            <div class="code-block">
+                <div class="code-header">crawler_changsha.py - 关键的数据合理性校验</div>
+                <pre><code><span class="keyword">async def</span> <span class="function">crawl_single_industry</span>(<span class="keyword">self</span>, industry_code, industry_name):
+    <span class="comment"># 点击行业</span>
+    <span class="keyword">if await</span> <span class="keyword">self</span>.<span class="function">click_industry</span>(industry_name):
+        district_data = <span class="keyword">await</span> <span class="keyword">self</span>.<span class="function">get_district_distribution</span>()
+        industry_total = <span class="function">sum</span>(district_data.values())
+
+        <span class="comment"># ===== 数据合理性校验 =====</span>
+        city_total = <span class="function">sum</span>(<span class="keyword">self</span>.city_total_data.values())
+        ratio = industry_total / city_total
+
+        <span class="keyword">if</span> ratio > <span class="string">0.9</span>:  <span class="comment"># 超过90%视为异常</span>
+            <span class="function">log</span>(<span class="string">f"⚠️ 数据异常: {industry_name} 接近制造业合计"</span>)
+            <span class="comment"># 自动重试</span>
+            <span class="keyword">await</span> <span class="keyword">self</span>.<span class="function">deselect_industry</span>(industry_name)
+            <span class="keyword">if not await</span> <span class="keyword">self</span>.<span class="function">click_industry</span>(industry_name):
+                <span class="keyword">return False</span>
+            district_data = <span class="keyword">await</span> <span class="keyword">self</span>.<span class="function">get_district_distribution</span>()</code></pre>
+            </div>
+
+            <h3>5. 筛选条件强制验证</h3>
+            <div class="code-block">
+                <div class="code-header">验证三个关键筛选条件</div>
+                <pre><code><span class="keyword">async def</span> <span class="function">verify_filters_are_set</span>(<span class="keyword">self</span>) -> <span class="keyword">bool</span>:
+    page_text = <span class="keyword">await</span> <span class="keyword">self</span>.page.<span class="function">text_content</span>(<span class="string">'body'</span>)
+
+    <span class="comment"># 检查地区</span>
+    location_ok = <span class="keyword">self</span>.search_location <span class="keyword">in</span> page_text
+
+    <span class="comment"># 检查登记状态</span>
+    status_ok = <span class="keyword">self</span>.company_status <span class="keyword">in</span> page_text
+
+    <span class="comment"># 检查制造业</span>
+    manufacturing_ok = <span class="string">"制造业"</span> <span class="keyword">in</span> page_text
+
+    <span class="keyword">if not</span> (location_ok <span class="keyword">and</span> status_ok <span class="keyword">and</span> manufacturing_ok):
+        <span class="function">log</span>(<span class="string">f"❌ 筛选条件验证失败"</span>)
+        <span class="keyword">return False</span>
+    <span class="keyword">return True</span></code></pre>
+            </div>
+
+            <h3>6. 临时数据持久化</h3>
+            <div class="code-block">
+                <div class="code-header">每个行业完成后立即保存</div>
+                <pre><code><span class="comment"># 每次完成一个行业后保存临时数据</span>
+<span class="function">save_temp_data</span>(<span class="keyword">self</span>.TEMP_DATA_FILE, {
+    <span class="string">"processed_industries"</span>: [t.code <span class="keyword">for</span> t <span class="keyword">in</span>
+                        <span class="keyword">self</span>.task_manager.<span class="function">get_completed_industries</span>()],
+    <span class="string">"data"</span>: <span class="keyword">self</span>.data,  <span class="comment"># 所有数据记录</span>
+    <span class="string">"session"</span>: <span class="function">asdict</span>(<span class="keyword">self</span>.task_manager.session),
+    <span class="string">"industry_tasks"</span>: {code: <span class="function">asdict</span>(t) <span class="keyword">for</span> code, t <span class="keyword">in</span>
+                          <span class="keyword">self</span>.task_manager.industry_tasks.items()}
+})</code></pre>
+            </div>
+
+            <h3>7. 执行进度表更新</h3>
+            <div class="code-block">
+                <div class="code-header">utils/excel_utils.py - 实时进度监控</div>
+                <pre><code><span class="keyword">def</span> <span class="function">update_execution_progress</span>(output_file, industry_tasks):
+    wb = <span class="function">load_workbook</span>(output_file)
+    ws = wb.<span class="function">create_sheet</span>(<span class="string">"执行进度"</span>, index=<span class="string">0</span>)  <span class="comment"># 放第一个位置</span>
+
+    <span class="comment"># 状态颜色映射</span>
+    status_colors = {
+        <span class="string">'completed'</span>: <span class="string">'C6EFCE'</span>,  <span class="comment"># 绿色</span>
+        <span class="string">'in_progress'</span>: <span class="string">'FFEB9C'</span>, <span class="comment"># 黄色</span>
+        <span class="string">'pending'</span>: <span class="string">'D9D9D9'</span>,  <span class="comment"># 灰色</span>
+        <span class="string">'failed'</span>: <span class="string">'FFC7CE'</span>,  <span class="comment"># 红色</span>
+    }
+
+    <span class="comment"># 按状态写入数据...</span></code></pre>
+            </div>
         </section>
 
         <section>
@@ -441,6 +664,24 @@ playwright install chromium</code></pre>
             <div class="success">
                 <strong>✅ 质量标准</strong>：城市汇总与细分行业明细差异 &lt; 2% 视为合格
             </div>
+        </section>
+
+        <section>
+            <h2>🔧 开发者指南</h2>
+
+            <h3>添加新的筛选条件</h3>
+            <p>在 <code>config_changsha.py</code> 中添加配置项，然后在 <code>setup_filters()</code> 中实现对应的选择逻辑。</p>
+
+            <h3>扩展数据校验规则</h3>
+            <p>在 <code>data_validator.py</code> 中添加新的校验方法，或在 <code>crawl_single_industry()</code> 中添加自定义校验逻辑。</p>
+
+            <h3>调试技巧</h3>
+            <ul>
+                <li>设置 <code>HEADLESS = False</code> 查看浏览器操作</li>
+                <li>检查 <code>logs/screenshots/</code> 下的截图</li>
+                <li>查看 <code>logs/changsha_crawler.log</code> 完整日志</li>
+                <li>使用 <code>python3 -i crawler_changsha.py</code> 进入交互模式</li>
+            </ul>
         </section>
 
         <footer>
