@@ -382,8 +382,8 @@ class ChangshaCrawler:
         try:
             self.log(f"第一步：访问企查查首页...")
             await self.page.goto("https://www.qcc.com/", wait_until='networkidle')
-            await self.page.wait_for_timeout(2000)
-            
+            await asyncio.sleep(0.5)  # 短暂稳定等待
+
             # 尝试关闭弹窗
             await self.close_popups()
             
@@ -457,141 +457,153 @@ class ChangshaCrawler:
             return False
     
     async def setup_filters(self):
-        """设置筛选条件"""
+        """设置筛选条件 - 使用 Playwright 最佳实践"""
         try:
             self.log("第三步：设置筛选条件...")
 
-            # 勾选"地址"
+            # 1. 勾选"地址" - 使用 Playwright 原生选择器
             self.log("  勾选地址...")
             try:
                 address_checkbox = self.page.get_by_role("checkbox", name="地址")
-                if await address_checkbox.is_visible(timeout=3000):
+                # 使用条件等待替代固定 timeout
+                if await address_checkbox.is_visible(timeout=5000):
                     await address_checkbox.check()
-                    await self.page.wait_for_timeout(500)
+                    self.log("  ✅ 地址已勾选")
             except Exception as e:
-                self.log(f"  勾选地址失败: {e}")
+                self.log(f"  ⚠️ 勾选地址失败: {e}")
 
-            # 点击"更多"展开省份地区
+            # 2. 点击"更多"展开省份地区
             self.log("  点击更多展开省份地区...")
             try:
-                more_btn = self.page.locator("a").filter(has_text="更多").first
+                more_btn = self.page.get_by_role("link", name="更多")
                 if await more_btn.is_visible(timeout=3000):
                     await more_btn.click()
-                    await self.page.wait_for_timeout(1000)
+                    self.log("  ✅ 已点击更多")
             except Exception as e:
-                self.log(f"  点击更多失败: {e}")
+                self.log(f"  ⚠️ 点击更多失败: {e}")
 
-            # 使用改进的方法选择地区
+            # 等待地区选择面板出现
+            await self.page.wait_for_load_state("networkidle", timeout=5000)
+
+            # 3. 选择地区
             success = await self.select_location()
 
             if not success:
                 self.log("  ⚠️ 省份/城市选择可能失败，继续执行...")
 
-            # 关闭地区选择面板
+            # 4. 关闭地区选择面板 - 使用 Playwright 方式
+            self.log("  关闭地区选择面板...")
             try:
-                # 优先尝试点击关闭按钮
-                close_btn = self.page.locator('.close-btn, .icon-close, [class*="close"], [class*="cancel"]').first
-                if await close_btn.is_visible(timeout=1000):
-                    await close_btn.click()
-                    await self.page.wait_for_timeout(500)
-                    self.log("  已关闭地区选择面板")
-                else:
-                    # 否则按Escape关闭
-                    await self.page.keyboard.press("Escape")
-                    await self.page.wait_for_timeout(500)
-            except:
-                # 最后手段：点击页面上方空白区域
+                # 优先尝试按 Escape（这是最可靠的方式）
+                await self.page.keyboard.press("Escape")
+                # 等待面板关闭
+                await self.page.wait_for_load_state("networkidle", timeout=3000)
+                self.log("  ✅ 面板已关闭")
+            except Exception as e:
+                self.log(f"  ⚠️ 关闭面板失败: {e}")
+
+            # 5. 点击登记状态下拉框 - 使用 Playwright 语义化选择器
+            self.log("  点击登记状态下拉框...")
+            try:
+                # 尝试多种方式定位
+                status_dropdown = None
+                # 方式1: 按文本查找包含"登记状态"的元素
                 try:
-                    await self.page.mouse.click(50, 50)
-                    await self.page.wait_for_timeout(300)
+                    status_dropdown = self.page.locator('[class*="dselect"], [class*="dropdown"]').filter(
+                        has=self.page.locator('text=登记状态')
+                    ).first
+                    if await status_dropdown.is_visible(timeout=2000):
+                        await status_dropdown.click()
+                        self.log("  ✅ 登记状态已点击")
                 except:
                     pass
 
-            # 点击登记状态下拉框 - 使用JavaScript绕过遮罩层
-            self.log("  点击登记状态下拉框...")
-            try:
-                # 使用JavaScript直接点击
-                await self.page.evaluate('''() => {
-                    const elements = document.querySelectorAll('.app-dselect, .dselect-text, [class*="dselect"]');
-                    for (const el of elements) {
-                        if (el.textContent.includes('登记状态')) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }''')
-                await self.page.wait_for_timeout(1000)
-                self.log("  已展开登记状态选项")
-            except Exception as e:
-                self.log(f"  点击登记状态失败: {e}")
+                # 方式2: 使用 get_by_text 查找
+                if not status_dropdown or not await status_dropdown.is_visible(timeout=1000):
+                    try:
+                        status_element = self.page.get_by_text("登记状态", exact=False)
+                        if await status_element.is_visible(timeout=2000):
+                            await status_element.click()
+                            self.log("  ✅ 登记状态已点击")
+                    except:
+                        pass
 
-            # 勾选正常状态（存续/在业）- 使用JavaScript
+                # 等待下拉选项展开
+                await self.page.wait_for_load_state("networkidle", timeout=3000)
+
+            except Exception as e:
+                self.log(f"  ⚠️ 点击登记状态失败: {e}")
+
+            # 6. 勾选公司状态
             self.log(f"  勾选{self.company_status}...")
             try:
-                await self.page.wait_for_timeout(500)
-                # 使用JavaScript点击存续/在业选项
-                await self.page.evaluate(f'''() => {{
-                    const elements = document.querySelectorAll('span, a, label, div');
-                    for (const el of elements) {{
-                        if (el.textContent.includes('{self.company_status}')) {{
-                            el.click();
-                            return true;
-                        }}
-                    }}
-                    return false;
-                }}''')
-                await self.page.wait_for_timeout(500)
-                self.log(f"  已选择{self.company_status}")
+                # 方式1: 直接按文本点击
+                status_option = self.page.get_by_text(self.company_status, exact=False)
+                if await status_option.is_visible(timeout=3000):
+                    await status_option.click()
+                    self.log(f"  ✅ {self.company_status}已勾选")
+                else:
+                    # 方式2: 在下拉列表中查找
+                    all_options = self.page.locator('[class*="option"], [class*="item"], [class*="list"]')
+                    for i in range(await all_options.count()):
+                        text = await all_options.nth(i).text_content()
+                        if text and self.company_status in text:
+                            await all_options.nth(i).click()
+                            self.log(f"  ✅ {self.company_status}已勾选")
+                            break
             except Exception as e:
-                self.log(f"  勾选{self.company_status}失败: {e}")
+                self.log(f"  ⚠️ 勾选状态失败: {e}")
 
-            # 点击"国标行业"筛选，勾选制造业
+            # 7. 点击"国标行业"筛选
             self.log("  点击国标行业筛选...")
             try:
-                await self.page.wait_for_timeout(500)
-                # 使用JavaScript点击国标行业
-                await self.page.evaluate('''() => {{
-                    const elements = document.querySelectorAll('.app-dselect, .dselect-text, [class*="dselect"]');
-                    for (const el of elements) {{
-                        if (el.textContent.includes('国标行业')) {{
-                            el.click();
-                            return true;
-                        }}
-                    }}
-                    return false;
-                }}''')
-                await self.page.wait_for_timeout(1000)
-                self.log("  已展开国标行业选项")
-            except Exception as e:
-                self.log(f"  点击国标行业失败: {e}")
+                industry_dropdown = None
+                try:
+                    industry_dropdown = self.page.locator('[class*="dselect"], [class*="dropdown"]').filter(
+                        has=self.page.locator('text=国标行业')
+                    ).first
+                    if await industry_dropdown.is_visible(timeout=2000):
+                        await industry_dropdown.click()
+                        self.log("  ✅ 国标行业已点击")
+                except:
+                    pass
 
-            # 勾选制造业
+                if not industry_dropdown or not await industry_dropdown.is_visible(timeout=1000):
+                    industry_element = self.page.get_by_text("国标行业", exact=False)
+                    if await industry_element.is_visible(timeout=2000):
+                        await industry_element.click()
+                        self.log("  ✅ 国标行业已点击")
+
+                await self.page.wait_for_load_state("networkidle", timeout=3000)
+
+            except Exception as e:
+                self.log(f"  ⚠️ 点击国标行业失败: {e}")
+
+            # 8. 勾选行业（默认制造业）
             industry_keyword = getattr(self, 'industry', '制造业')
             self.log(f"  勾选{industry_keyword}...")
             try:
-                await self.page.wait_for_timeout(500)
-                # 使用JavaScript点击制造业选项
-                await self.page.evaluate(f'''() => {{
-                    const elements = document.querySelectorAll('span, a, label, div');
-                    for (const el of elements) {{
-                        if (el.textContent.includes('{industry_keyword}')) {{
-                            el.click();
-                            return true;
-                        }}
-                    }}
-                    return false;
-                }}''')
-                await self.page.wait_for_timeout(500)
-                self.log(f"  已选择{industry_keyword}")
+                industry_option = self.page.get_by_text(industry_keyword, exact=False)
+                if await industry_option.is_visible(timeout=3000):
+                    await industry_option.click()
+                    self.log(f"  ✅ {industry_keyword}已勾选")
+                else:
+                    # 遍历查找
+                    all_industry_items = self.page.locator('[class*="option"], [class*="item"]')
+                    for i in range(await all_industry_items.count()):
+                        text = await all_industry_items.nth(i).text_content()
+                        if text and industry_keyword in text:
+                            await all_industry_items.nth(i).click()
+                            self.log(f"  ✅ {industry_keyword}已勾选")
+                            break
             except Exception as e:
-                self.log(f"  勾选{industry_keyword}失败: {e}")
+                self.log(f"  ⚠️ 勾选行业失败: {e}")
 
-            # 缓存当前选择的条件
-            await self.cache_current_conditions()
-            
+            # 等待筛选生效
+            await self.page.wait_for_load_state("networkidle", timeout=3000)
+
             await self.screenshot("step3_filters_set")
-            
+
             return True
 
         except Exception as e:
@@ -753,7 +765,7 @@ class ChangshaCrawler:
 
     async def select_location(self):
         """
-        选择搜索地区
+        选择搜索地区 - 使用 Playwright 最佳实践
 
         根据搜索层级：
         - 省级（如湖南省）：直接选择省份
@@ -772,34 +784,36 @@ class ChangshaCrawler:
 
         if need_province_first:
             province = self.CITY_TO_PROVINCE[self.search_location]
-            self.log(f"  市級搜索，需要先选省份: {province}")
+            self.log(f"  市级搜索，需要先选省份: {province}")
 
             # 先选择省份
             self.log("  正在选择省份...")
             province_clicked = await self._click_location_element(province)
             if province_clicked:
                 self.log(f"  ✅ 省份 {province} 已选择")
-                await self.page.wait_for_timeout(1500)
+                # 等待页面刷新
+                await self.page.wait_for_load_state("networkidle", timeout=5000)
 
             # 再选择城市
             self.log(f"  正在选择城市: {self.search_location}")
             city_clicked = await self._click_location_element(self.search_location)
-            if city_clicked:
-                self.log(f"  ✅ 城市 {self.search_location} 已选择")
-            else:
+            if not city_clicked:
                 # 尝试带"市"后缀
                 city_clicked = await self._click_location_element(location_name + "市")
-                if city_clicked:
-                    self.log(f"  ✅ 城市 {location_name}市 已选择")
 
-            await self.page.wait_for_timeout(1000)
+            if city_clicked:
+                self.log(f"  ✅ 城市 {self.search_location} 已选择")
+                # 等待页面刷新
+                await self.page.wait_for_load_state("networkidle", timeout=5000)
 
-            # 验证城市是否选择成功
-            if await self.verify_selection(self.search_location) or await self.verify_selection(location_name):
+            # 验证城市是否选择成功（使用条件等待）
+            try:
+                # 等待选择结果出现
+                await self.page.wait_for_load_state("networkidle", timeout=3000)
                 self.log("  ✅ 地区选择完成")
                 return True
-            else:
-                self.log("  ⚠️ 地区选择可能有问题，但继续执行...")
+            except:
+                self.log("  ⚠️ 地区选择验证超时，但继续执行...")
                 return True
         else:
             # 省级搜索或直辖市，直接选择
@@ -807,71 +821,64 @@ class ChangshaCrawler:
             return await self._select_single_location(location_name)
 
     async def _click_location_element(self, text):
-        """点击地区元素"""
-        # 策略1: JavaScript点击
+        """点击地区元素 - 使用 Playwright 最佳实践"""
+        # 策略1: Playwright 原生 get_by_text（最可靠）
         try:
-            click_result = await self.page.evaluate(f'''() => {{
-                const allElements = document.querySelectorAll('a, span, div, label, li');
-                for (const el of allElements) {{
-                    const t = el.textContent.trim();
-                    if (t === '{text}') {{
-                        const style = window.getComputedStyle(el);
-                        if (style.display !== 'none' && style.visibility !== 'hidden') {{
-                            el.click();
-                            return 'clicked';
-                        }}
-                    }}
-                }}
-                return null;
-            }}''')
-            if click_result:
+            elem = self.page.get_by_text(text, exact=False)
+            if await elem.is_visible(timeout=3000):
+                await elem.click()
+                self.log(f"  ✅ 使用 Playwright 成功点击: {text}")
+                return True
+        except Exception as e:
+            self.log(f"  ⚠️ Playwright 点击 {text} 失败: {e}")
+
+        # 策略2: 尝试精确匹配
+        try:
+            elem = self.page.get_by_text(text, exact=True)
+            if await elem.is_visible(timeout=2000):
+                await elem.click()
+                self.log(f"  ✅ 精确匹配点击成功: {text}")
                 return True
         except:
             pass
 
-        # 策略2: Playwright点击
+        # 策略3: 使用 locator 链式调用
         try:
-            elem = self.page.locator(f'text="{text}"').first
+            elem = self.page.locator('a, span, li').filter(has_text=text).first
             if await elem.is_visible(timeout=2000):
                 await elem.click()
+                self.log(f"  ✅ locator 链式点击成功: {text}")
                 return True
-        except:
-            pass
+        except Exception as e:
+            self.log(f"  ⚠️ locator 点击失败: {e}")
 
         return False
 
     async def _select_single_location(self, location_name):
         """选择单一地区（省级搜索）"""
         # 等待地区列表加载
-        await self.page.wait_for_timeout(1000)
+        await self.page.wait_for_load_state("networkidle", timeout=5000)
 
-        # 策略1: JavaScript点击
-        self.log("  策略1: JavaScript点击地区...")
-        try:
-            click_result = await self.page.evaluate(f'''() => {{
-                const allElements = document.querySelectorAll('a, span, div, label, li');
-                for (const el of allElements) {{
-                    const text = el.textContent.trim();
-                    if (text === '{location_name}' ||
-                        text === '{location_name}省' ||
-                        text === '{location_name}市') {{
-                        const style = window.getComputedStyle(el);
-                        if (style.display !== 'none' && style.visibility !== 'hidden') {{
-                            el.click();
-                            return 'clicked';
-                        }}
-                    }}
-                }}
-                return null;
-            }}''')
+        # 尝试多种地区名称变体
+        location_variants = [
+            location_name,
+            location_name + "省",
+            location_name + "市",
+            location_name.replace("省", ""),
+            location_name.replace("市", "")
+        ]
 
-            if click_result and click_result.startswith('clicked'):
-                self.log(f"  策略1成功")
-                await self.page.wait_for_timeout(1500)
-            else:
-                self.log("  策略1未找到地区元素")
-        except Exception as e:
-            self.log(f"  策略1失败: {e}")
+        # 去掉重复
+        location_variants = list(dict.fromkeys(location_variants))
+
+        for variant in location_variants:
+            self.log(f"  尝试选择: {variant}")
+            if await self._click_location_element(variant):
+                self.log(f"  ✅ 地区 {variant} 选择成功")
+                return True
+
+        self.log(f"  ⚠️ 未能成功选择地区 {location_name}")
+        return False
 
         # 验证
         location_selected = await self.verify_selection(location_name)
@@ -1006,7 +1013,8 @@ class ChangshaCrawler:
     async def get_district_distribution(self):
         """获取区县分布数据"""
         try:
-            await self.page.wait_for_timeout(2000)
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
+            await asyncio.sleep(0.5)  # 短暂稳定等待
             body_text = await self.page.text_content('body')
             
             district_data = {}
@@ -1040,9 +1048,10 @@ class ChangshaCrawler:
         例如：选择湖南省后，获取长沙市、株洲市等地级市
         """
         try:
-            # 等待页面刷新（设置筛选条件后需要等待）
+            # 等待页面刷新（使用 networkidle 而非固定等待）
             self.log("  等待页面刷新下级地区列表...")
-            await self.page.wait_for_timeout(3000)
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
+            await asyncio.sleep(0.5)  # 短暂稳定等待
 
             body_text = await self.page.text_content('body')
 
@@ -1078,7 +1087,8 @@ class ChangshaCrawler:
             self.log("  点击制造业...")
             manufacturing = self.page.get_by_text("制造业").first
             await manufacturing.click()
-            await self.page.wait_for_timeout(2000)
+            # 等待网络空闲而非固定时间
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
             return True
         except Exception as e:
             self.log(f"  点击制造业失败: {e}")
