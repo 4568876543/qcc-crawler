@@ -395,29 +395,34 @@ class ChangshaCrawler:
                 self.log("请打开浏览器窗口，使用企查查APP扫码登录")
                 self.log("登录成功后，程序将自动继续...")
                 self.log("")
-                
+
                 # 等待用户登录，最长等待5分钟
-                for i in range(150):  # 150 * 2秒 = 5分钟
-                    await self.page.wait_for_timeout(2000)
-                    
+                # 使用状态判断：等待 networkidle 或用户信息加载
+                login_success = False
+                for i in range(60):  # 最多60次检查
+                    # 优先等待网络空闲（登录成功会触发页面刷新）
+                    try:
+                        await self.page.wait_for_load_state("networkidle", timeout=3000)
+                    except:
+                        pass  # 超时继续检查
+
                     # 检查是否登录成功
                     if await self.check_login():
                         self.log("✅ 检测到已登录！")
-                        await self.page.wait_for_timeout(1000)
-                        
                         # 登录成功后关闭可能的弹窗
                         await self.close_popups()
-                        
                         # 保存cookie
                         await self.save_cookies()
                         self.log("✅ 已保存登录状态")
+                        login_success = True
                         break
-                    
-                    # 每10秒提示一次
+
+                    # 每5秒提示一次
                     if i % 5 == 0 and i > 0:
-                        remaining = 150 - i
-                        self.log(f"⏳ 等待登录中... (剩余 {remaining*2} 秒)")
-                else:
+                        remaining = 60 - i
+                        self.log(f"⏳ 等待登录中... (剩余 {remaining*3} 秒)")
+
+                if not login_success:
                     self.log("❌ 登录超时，请重新运行程序")
                     return False
             
@@ -439,10 +444,10 @@ class ChangshaCrawler:
             # 点击搜索按钮
             search_btn = self.page.get_by_role("button", name="查一下").first
             await search_btn.click()
-            
-            await self.page.wait_for_load_state('networkidle')
-            await self.page.wait_for_timeout(2000)
-            
+
+            await self.page.wait_for_load_state('networkidle', timeout=10000)
+            await asyncio.sleep(0.5)  # 短暂稳定等待
+
             # 关闭搜索结果页可能出现的弹窗
             await self.close_popups()
             
@@ -1170,8 +1175,9 @@ class ChangshaCrawler:
                     self.log(f"  [行业选择] 方式4: 点击文本成功")
                 except:
                     pass
-            
-            await self.page.wait_for_timeout(3000)
+
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
+            await asyncio.sleep(0.5)  # 短暂稳定等待
 
             # 截图记录选择后状态
             await self.screenshot(f"after_select_{industry_name[:8]}")
@@ -1189,7 +1195,7 @@ class ChangshaCrawler:
             # 备选验证：检查页面是否有包含行业名称的可信元素
             try:
                 # 等待更长时间让页面更新
-                await self.page.wait_for_timeout(2000)
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
                 # 查找"已选行业"或类似的标签
                 selected_industry = await self.page.locator('text="已选行业"').first.text_content()
                 if selected_industry and industry_name in selected_industry:
