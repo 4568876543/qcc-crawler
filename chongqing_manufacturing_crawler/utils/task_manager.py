@@ -242,9 +242,11 @@ class TaskManager:
         self.save()
     
     def get_pending_industries(self) -> List[IndustryTask]:
-        """获取待处理的行业列表"""
-        return [task for task in self.industry_tasks.values() 
-                if task.status in [TaskStatus.PENDING.value, TaskStatus.FAILED.value]]
+        """获取待处理的行业列表（包括中断后未完成的）"""
+        return [task for task in self.industry_tasks.values()
+                if task.status in [TaskStatus.PENDING.value,
+                                   TaskStatus.FAILED.value,
+                                   TaskStatus.IN_PROGRESS.value]]
     
     def get_completed_industries(self) -> List[IndustryTask]:
         """获取已完成的行业列表"""

@@ -4,6 +4,7 @@ import re
 import os
 import json
 from datetime import datetime
+from dataclasses import asdict
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # 使用长沙配置
@@ -37,7 +38,8 @@ from utils.excel_utils import (
     save_city_summary_table,
     save_industry_detail_table,
     save_summary_table,
-    validate_data_consistency
+    validate_data_consistency,
+    update_execution_progress
 )
 from utils.data_utils import (
     save_temp_data,
@@ -206,7 +208,53 @@ class ChangshaCrawler:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
-    
+
+    def get_current_filters(self):
+        """获取当前筛选条件"""
+        filters = {
+            '地区': self.search_location,
+            '登记状态': self.company_status,
+            '行业': '制造业',
+        }
+        return filters
+
+    async def verify_filters_are_set(self) -> bool:
+        """
+        验证筛选条件是否已正确设置
+
+        Returns:
+            bool: 验证是否通过
+        """
+        try:
+            # 获取页面上的筛选条件文本
+            await self.page.wait_for_timeout(1000)
+            page_text = await self.page.text_content('body')
+
+            # 检查地区
+            location_ok = self.search_location in page_text or self.search_location.replace('市', '') in page_text
+            if not location_ok:
+                self.log("❌ [验证失败] 地区筛选条件未设置")
+                return False
+
+            # 检查登记状态
+            status_ok = self.company_status in page_text
+            if not status_ok:
+                self.log(f"❌ [验证失败] 登记状态筛选条件未设置 (应包含: {self.company_status})")
+                return False
+
+            # 检查制造业 - 查找"制造业"关键字
+            manufacturing_ok = "制造业" in page_text
+            if not manufacturing_ok:
+                self.log("❌ [验证失败] 行业筛选条件未设置 (应包含: 制造业)")
+                return False
+
+            self.log("✅ [验证通过] 筛选条件已正确设置")
+            return True
+
+        except Exception as e:
+            self.log(f"⚠️ [验证异常] 筛选条件验证出错: {e}")
+            return False
+
     async def check_login(self):
         """检查登录状态 - 改进版：检查是否有登录按钮或二维码"""
         try:
@@ -724,7 +772,30 @@ class ChangshaCrawler:
             
             # 截图记录选择前状态
             await self.screenshot(f"before_select_{industry_name[:8]}")
-            
+
+            # 先尝试点击"更多"按钮展开行业列表
+            try:
+                # 先关闭遮罩层
+                try:
+                    await self.page.evaluate('''() => {
+                        const mask = document.querySelector('.expanded-mask, [class*="mask"]');
+                        if (mask) mask.style.display = 'none';
+                    }''')
+                except:
+                    pass
+
+                more_btns = self.page.locator("a:has-text('更多'), button:has-text('更多'), span:has-text('更多')")
+                count = await more_btns.count()
+                for i in range(min(count, 5)):
+                    more_btn = more_btns.nth(i)
+                    if await more_btn.is_visible(timeout=2000):
+                        await more_btn.click(force=True)
+                        self.log(f"  [行业选择] 点击'更多'展开行业列表")
+                        await self.page.wait_for_timeout(1000)
+                        break
+            except Exception as e:
+                self.log(f"  [行业选择] 点击'更多'失败或无更多按钮: {e}")
+
             # 简化方法：直接用Playwright点击包含行业名称的元素
             # 行业列表中的项通常是 <a> 或 <span> 标签
             clicked = False
@@ -771,14 +842,36 @@ class ChangshaCrawler:
                 except:
                     pass
             
-            await self.page.wait_for_timeout(2000)
-            
+            await self.page.wait_for_timeout(3000)
+
             # 截图记录选择后状态
             await self.screenshot(f"after_select_{industry_name[:8]}")
-            
+
+            # 验证行业是否真正被选中（检查地址栏是否包含行业名称）
+            try:
+                # 获取页面顶部地址栏内容 - 通常在面包屑或搜索条件区域
+                breadcrumb = await self.page.locator('.breadcrumb, .condition-bar, [class*="address"], [class*="condition"]').first.text_content()
+                if breadcrumb and industry_name in breadcrumb:
+                    self.log(f"  [行业选择] ✅ 已点击: {industry_name}")
+                    return True
+            except:
+                pass
+
+            # 备选验证：检查页面是否有包含行业名称的可信元素
+            try:
+                # 等待更长时间让页面更新
+                await self.page.wait_for_timeout(2000)
+                # 查找"已选行业"或类似的标签
+                selected_industry = await self.page.locator('text="已选行业"').first.text_content()
+                if selected_industry and industry_name in selected_industry:
+                    self.log(f"  [行业选择] ✅ 已点击: {industry_name}")
+                    return True
+            except:
+                pass
+
             if clicked:
-                self.log(f"  [行业选择] ✅ 已点击: {industry_name}")
-                return True
+                self.log(f"  [行业选择] ⚠️ 已点击但未确认: {industry_name}")
+                return True  # 仍然返回True，因为点击可能成功了
             else:
                 self.log(f"  [行业选择] ❌ 未能点击: {industry_name}")
                 return False
@@ -933,36 +1026,40 @@ class ChangshaCrawler:
 
     async def init_task_session(self):
         """初始化任务会话"""
-        pending = self.task_manager.get_pending_industries()
-        
-        if pending and self.task_manager.session:
-            self.log(f"[断点续爬] 发现未完成任务: {len(pending)} 个行业待处理")
-            progress = self.task_manager.get_progress()
-            self.log(f"[断点续爬] 进度: {self.task_manager.get_progress_bar()}")
-            
-            temp_data = load_temp_data(self.TEMP_DATA_FILE)
-            if temp_data:
-                self.data = temp_data.get('data', [])
-                self.log(f"[断点续爬] 已加载 {len(self.data)} 条历史数据")
-            
-            return True
+        # 优先从磁盘加载TaskManager状态（确保重启后状态不丢失）
+        self.task_manager._load()
+
+        if self.task_manager.session:
+            pending = self.task_manager.get_pending_industries()
+            if pending:
+                self.log(f"[断点续爬] 发现未完成任务: {len(pending)} 个行业待处理")
+                progress = self.task_manager.get_progress()
+                self.log(f"[断点续爬] 进度: {self.task_manager.get_progress_bar()}")
+
+                temp_data = load_temp_data(self.TEMP_DATA_FILE)
+                if temp_data:
+                    self.data = temp_data.get('data', [])
+                    # 恢复industry_tasks状态
+                    if 'industry_tasks' in temp_data:
+                        for code, task_data in temp_data['industry_tasks'].items():
+                            if code in self.task_manager.industry_tasks:
+                                # 更新已有任务状态
+                                for key, value in task_data.items():
+                                    if hasattr(self.task_manager.industry_tasks[code], key):
+                                        setattr(self.task_manager.industry_tasks[code], key, value)
+                    self.log(f"[断点续爬] 已加载 {len(self.data)} 条历史数据")
+
+                # 从session缓存恢复districts
+                if self.task_manager.session.districts_cache:
+                    self.districts = self.task_manager.session.districts_cache
+                    self.log(f"[断点续爬] 已恢复地区列表: {len(self.districts)} 个地区")
+
+                return True
+            else:
+                self.log("[会话完成] 所有行业已爬取，无需继续")
+                return False
         else:
             self.log("[新建会话] 初始化任务...")
-            
-            industries = dict(MANUFACTURING_SUBCATEGORIES)
-            districts = list(self.districts)
-            
-            self.task_manager.init_session(
-                city=self.search_location,
-                status_filter=self.company_status,
-                industries=industries,
-                districts=districts
-            )
-            
-            self.index_cache.set_city(self.search_location)
-            self.index_cache.set_districts(districts)
-            self.index_cache.set_industries(industries)
-            
             return False
     
     async def crawl_single_industry(self, industry_code: str, industry_name: str) -> bool:
@@ -994,6 +1091,31 @@ class ChangshaCrawler:
                 district_data = await self.get_district_distribution()
                 
                 if district_data:
+                    industry_total = sum(district_data.values())
+
+                    # ====== 数据合理性校验 ======
+                    # 如果某行业数据接近制造业合计（>90%），说明行业选择可能未生效
+                    if hasattr(self, 'city_total_data') and self.city_total_data:
+                        city_total = sum(self.city_total_data.values())
+                        if city_total > 0 and industry_total > 0:
+                            ratio = industry_total / city_total
+                            if ratio > 0.9:
+                                self.log(f"  ⚠️ 警告: {industry_name} 数据 ({industry_total}) 接近制造业合计 ({city_total})")
+                                self.log(f"  ⚠️ 比例: {ratio*100:.1f}%，行业选择可能未生效！")
+                                await self.screenshot(f"WARNING_{industry_code}_data_anomaly")
+                                # 重试一次：先取消选择，再重新点击
+                                self.log(f"  重试行业选择...")
+                                await self.deselect_industry(industry_name)
+                                await self.page.wait_for_timeout(1000)
+                                if not await self.click_industry(industry_name):
+                                    self.log(f"  ❌ 重试失败，跳过该行业")
+                                    self.task_manager.fail_industry(industry_code, "行业选择数据异常")
+                                    return False
+                                # 重新获取数据
+                                district_data = await self.get_district_distribution()
+                                industry_total = sum(district_data.values()) if district_data else 0
+                                self.log(f"  重试后数据: {industry_total} 家企业")
+
                     for district, count in district_data.items():
                         self.data.append({
                             "区县": district,
@@ -1002,20 +1124,23 @@ class ChangshaCrawler:
                             "企业数量": count
                         })
                         self.task_manager.update_district(district, industry_code, industry_name, count)
-                    
-                    self.log(f"  ✅ {industry_name}: {len(district_data)} 个区县, 共 {sum(district_data.values())} 家企业")
+
+                    self.log(f"  ✅ {industry_name}: {len(district_data)} 个区县, 共 {industry_total} 家企业")
                     
                     # 保存行业明细表 + 截图
                     if hasattr(self, 'city_total_data'):
+                        filters = self.get_current_filters()
+                        filters['筛选行业'] = industry_name
                         save_industry_detail_table(
-                            self.output_dir, 
-                            industry_code, 
-                            industry_name, 
-                            district_data, 
-                            self.city_total_data, 
-                            self.search_location
+                            self.output_dir,
+                            industry_code,
+                            industry_name,
+                            district_data,
+                            self.city_total_data,
+                            self.search_location,
+                            filters
                         )
-                        await self.screenshot(f"{industry_name}行业汇总表")
+                        await self.screenshot(f"{industry_name}行业汇总表_[{filters['地区']}]_[{filters['登记状态']}]")
                         self.log(f"  行业明细表已保存并截图")
                     
                     if SAVE_ON_EACH_INDUSTRY:
@@ -1025,10 +1150,15 @@ class ChangshaCrawler:
                         self.log(f"  已保存到Excel")
                     
                     self.task_manager.complete_industry(
-                        industry_code, 
-                        len(district_data), 
+                        industry_code,
+                        len(district_data),
                         sum(district_data.values())
                     )
+
+                    # 更新执行进度表
+                    industry_tasks = [asdict(t) for t in self.task_manager.industry_tasks.values()]
+                    update_execution_progress(self.OUTPUT_FILE, industry_tasks)
+                    self.log(f"  执行进度表已更新")
                 else:
                     self.log(f"  ⚠️ {industry_name}: 未获取到数据")
                     self.task_manager.fail_industry(industry_code, "未获取到区县数据")
@@ -1036,11 +1166,13 @@ class ChangshaCrawler:
                 
                 # 取消选择行业
                 await self.deselect_industry(industry_name)
-                
-                # 保存临时数据
+
+                # 保存临时数据（包含完整状态）
                 save_temp_data(self.TEMP_DATA_FILE, {
                     "processed_industries": [t.code for t in self.task_manager.get_completed_industries()],
-                    "data": self.data
+                    "data": self.data,
+                    "session": asdict(self.task_manager.session) if self.task_manager.session else None,
+                    "industry_tasks": {code: asdict(t) for code, t in self.task_manager.industry_tasks.items()}
                 })
                 
                 random_delay(RANDOM_DELAY_MIN, RANDOM_DELAY_MAX)
@@ -1081,8 +1213,9 @@ class ChangshaCrawler:
                 # ====== 步骤1: 保存城市汇总表 + 截图 ======
                 self.log("保存城市汇总表...")
                 self.city_total_data = manufacturing_data  # 保存城市总数据供后续使用
-                save_city_summary_table(self.output_dir, manufacturing_data, self.search_location)
-                await self.screenshot("城市汇总表")
+                filters = self.get_current_filters()
+                save_city_summary_table(self.output_dir, manufacturing_data, self.search_location, filters)
+                await self.screenshot(f"城市汇总表_[{filters['地区']}]_[{filters['登记状态']}]")
                 self.log("  城市汇总表已保存并截图")
             
             return True
@@ -1107,20 +1240,26 @@ class ChangshaCrawler:
     async def crawl_industries_batch(self, restart_interval: int = 10):
         """
         批量爬取行业数据，每restart_interval个行业重启浏览器
-        
+
         Args:
             restart_interval: 每爬取多少个行业后重启浏览器
         """
+        # ====== 开始爬取前再次验证筛选条件 ======
+        if not await self.verify_filters_are_set():
+            self.log("❌ [错误] 筛选条件验证失败，无法继续爬取行业数据！")
+            await self.screenshot("FILTER_VERIFICATION_FAILED_BATCH")
+            return False
+
         pending_industries = self.task_manager.get_pending_industries()
         total = len(pending_industries)
-        
+
         if total == 0:
             self.log("所有行业已完成爬取")
             return True
-        
+
         self.log(f"待处理行业数: {total}")
         self.log(f"每 {restart_interval} 个行业重启浏览器")
-        
+
         completed_count = 0
         
         for i, task in enumerate(pending_industries):
@@ -1138,30 +1277,35 @@ class ChangshaCrawler:
                 # 每restart_interval个行业，重启浏览器
                 if completed_count > 0 and completed_count % restart_interval == 0:
                     self.log(f"已完成 {completed_count} 个行业，重启浏览器...")
-                    
-                    # 保存当前进度
+
+                    # 保存当前进度（包含完整状态）
                     save_temp_data(self.TEMP_DATA_FILE, {
                         "processed_industries": [t.code for t in self.task_manager.get_completed_industries()],
-                        "data": self.data
+                        "data": self.data,
+                        "session": asdict(self.task_manager.session) if self.task_manager.session else None,
+                        "industry_tasks": {code: asdict(t) for code, t in self.task_manager.industry_tasks.items()}
                     })
-                    
+
                     # 关闭浏览器
                     await self.close_browser()
-                    
+
                     # 重新启动浏览器
                     await self.init_browser()
-                    
+
+                    # 从磁盘重新加载TaskManager状态（恢复in_progress状态）
+                    self.task_manager._load()
+
                     # 重新导航到搜索页面并设置条件
                     if not await self.navigate_to_search():
                         self.log("❌ 重启后导航失败")
                         return False
-                    
+
                     await self.save_cookies()
-                    
+
                     if not await self.setup_filters():
                         self.log("❌ 重启后设置筛选条件失败")
                         return False
-                    
+
                     self.log("浏览器重启完成，继续爬取...")
                     
             except Exception as e:
@@ -1169,18 +1313,24 @@ class ChangshaCrawler:
                 import traceback
                 self.log(f"  异常堆栈: {traceback.format_exc()}")
                 await self.screenshot(f"industry_{industry_code}_exception")
-                
-                # 保存当前进度
+
+                # 保存当前进度（包含完整状态）
                 save_temp_data(self.TEMP_DATA_FILE, {
                     "processed_industries": [t.code for t in self.task_manager.get_completed_industries()],
-                    "data": self.data
+                    "data": self.data,
+                    "session": asdict(self.task_manager.session) if self.task_manager.session else None,
+                    "industry_tasks": {code: asdict(t) for code, t in self.task_manager.industry_tasks.items()}
                 })
-                
+
                 # 尝试重启浏览器
                 self.log("尝试重启浏览器...")
                 try:
                     await self.close_browser()
                     await self.init_browser()
+
+                    # 从磁盘重新加载TaskManager状态（恢复in_progress状态）
+                    self.task_manager._load()
+
                     if await self.navigate_to_search():
                         await self.save_cookies()
                         if await self.setup_filters():
@@ -1264,12 +1414,33 @@ class ChangshaCrawler:
                     last_record.get('行业类别', ''),
                     "程序意外中断前的最后一条数据,需人工核实"
                 )
-            
-            self.log("创建Excel文件...")
-            create_excel_template(self.OUTPUT_FILE)
-            create_district_sheets(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
-            create_summary_sheet(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
-            
+
+            # 续爬时检查是否需要创建Excel模板
+            if is_resume and os.path.exists(self.OUTPUT_FILE):
+                self.log(f"检测到现有Excel文件，复用: {self.OUTPUT_FILE}")
+                # 将已恢复的数据写入Excel
+                if self.data:
+                    self.log(f"将 {len(self.data)} 条已恢复数据写入Excel...")
+                    update_excel_data(self.OUTPUT_FILE, self.data)
+                    update_all_district_sheets(self.OUTPUT_FILE, self.data, self.districts, MANUFACTURING_SUBCATEGORIES)
+                    update_summary_sheet(self.OUTPUT_FILE, self.data)
+                # 更新执行进度表
+                if self.task_manager.industry_tasks:
+                    industry_tasks = [asdict(t) for t in self.task_manager.industry_tasks.values()]
+                    update_execution_progress(self.OUTPUT_FILE, industry_tasks)
+                    self.log("执行进度表已更新（续爬）")
+            else:
+                self.log("创建Excel文件...")
+                create_excel_template(self.OUTPUT_FILE)
+                create_district_sheets(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
+                create_summary_sheet(self.OUTPUT_FILE, self.districts, MANUFACTURING_SUBCATEGORIES)
+
+            # 初始化执行进度表
+            if self.task_manager.industry_tasks:
+                industry_tasks = [asdict(t) for t in self.task_manager.industry_tasks.values()]
+                update_execution_progress(self.OUTPUT_FILE, industry_tasks)
+                self.log("执行进度表已初始化")
+
             if not await self.navigate_to_search():
                 return
             
@@ -1294,17 +1465,42 @@ class ChangshaCrawler:
             else:
                 self.log(f"  发现 {len(self.districts)} 个下级地区: {', '.join(self.districts[:5])}...")
 
+            # 新建会话：此时districts已获取，初始化任务会话
+            if not is_resume and not self.task_manager.session:
+                self.log("[新建会话] 初始化任务...")
+                industries = dict(MANUFACTURING_SUBCATEGORIES)
+                self.task_manager.init_session(
+                    city=self.search_location,
+                    status_filter=self.company_status,
+                    industries=industries,
+                    districts=self.districts
+                )
+                self.index_cache.set_city(self.search_location)
+                self.index_cache.set_districts(self.districts)
+                self.index_cache.set_industries(industries)
+
+            # ====== 强制验证筛选条件 ======
+            self.log("=" * 60)
+            self.log("验证筛选条件设置...")
+            if not await self.verify_filters_are_set():
+                self.log("❌ [错误] 筛选条件验证失败，无法继续爬取！")
+                self.log("请检查：1) 地区是否正确选择 2) 登记状态是否勾选 3) 制造业是否已点击")
+                await self.screenshot("FILTER_VERIFICATION_FAILED")
+                return
+            self.log("=" * 60)
+
             # 获取制造业汇总数据
             if not await self.crawl_all_industries():
                 return
-            
+
             # 批量爬取各行业数据（每10个行业重启浏览器）
             if not await self.crawl_industries_batch(restart_interval=10):
                 return
             
             # ====== 步骤3: 所有行业完成后保存汇总明细表 ======
             self.log("保存汇总明细表...")
-            summary_file = save_summary_table(self.output_dir, self.data, self.search_location)
+            filters = self.get_current_filters()
+            summary_file = save_summary_table(self.output_dir, self.data, self.search_location, filters)
             self.log(f"  汇总明细表已保存: {summary_file}")
             
             self.log("更新Excel汇总表...")
