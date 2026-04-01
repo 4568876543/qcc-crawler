@@ -243,6 +243,8 @@ def run_crawler():
         config.DISTRICT_LEVEL = user_config["district_level"]
         config.COMPANY_STATUS = user_config["company_status"]
         config.CRAWL_KEYWORD = user_config["keyword"]
+        if "industry" in user_config:
+            config.INDUSTRY = user_config["industry"]
     else:
         # 继续上次爬取，加载保存的配置
         if saved_config:

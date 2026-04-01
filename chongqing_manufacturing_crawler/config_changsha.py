@@ -297,7 +297,8 @@ SEARCH_LOCATION = "湖南省"  # 搜索地区
 DISTRICT_LEVEL = "province"  # 搜索层级: "province"(省级) 或 "city"(市级)
 INDUSTRY_CATEGORY = "制造业"
 INDUSTRY_CODE = "C"  # 国标行业代码
-COMPANY_STATUS = "存续/在业"  # 仅存续/在业状态
+COMPANY_STATUS = "存续（在业）"  # 仅存续/在业状态（注意括号格式）
+INDUSTRY = "制造业"  # 国标行业筛选
 CRAWL_KEYWORD = "湖南制造业"  # 爬取关键字，用于生成输出目录名
 
 # 下级地区列表（程序运行时从企查查页面动态获取，不需要预定义）
