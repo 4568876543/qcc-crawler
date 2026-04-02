@@ -482,9 +482,18 @@ class ChangshaCrawler:
             # 2. 点击"更多"展开省份地区
             self.log("  点击更多展开省份地区...")
             try:
+                # 先关闭遮罩层
+                try:
+                    await self.page.evaluate('''() => {
+                        const mask = document.querySelector('.expanded-mask, [class*="mask"]');
+                        if (mask) mask.style.display = 'none';
+                    }''')
+                except:
+                    pass
+
                 more_btn = self.page.get_by_role("link", name="更多")
                 if await more_btn.is_visible(timeout=3000):
-                    await more_btn.click()
+                    await more_btn.click(force=True)
                     self.log("  ✅ 已点击更多")
             except Exception as e:
                 self.log(f"  ⚠️ 点击更多失败: {e}")
