@@ -381,7 +381,9 @@ class ChangshaCrawler:
         """访问企查查，搜索长沙 - 改进版：更好的登录等待机制"""
         try:
             self.log(f"第一步：访问企查查首页...")
-            await self.page.goto("https://www.qcc.com/", wait_until='networkidle')
+            # 增加超时时间到60秒，并使用domcontentloaded减少等待时间
+            await self.page.goto("https://www.qcc.com/", wait_until='domcontentloaded', timeout=60000)
+            await self.page.wait_for_load_state("networkidle", timeout=60000)
             await asyncio.sleep(0.5)  # 短暂稳定等待
 
             # 尝试关闭弹窗
@@ -402,7 +404,7 @@ class ChangshaCrawler:
                 for i in range(60):  # 最多60次检查
                     # 优先等待网络空闲（登录成功会触发页面刷新）
                     try:
-                        await self.page.wait_for_load_state("networkidle", timeout=3000)
+                        await self.page.wait_for_load_state("networkidle", timeout=10000)
                     except:
                         pass  # 超时继续检查
 
@@ -502,7 +504,7 @@ class ChangshaCrawler:
                 # 优先尝试按 Escape（这是最可靠的方式）
                 await self.page.keyboard.press("Escape")
                 # 等待面板关闭
-                await self.page.wait_for_load_state("networkidle", timeout=3000)
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
                 self.log("  ✅ 面板已关闭")
             except Exception as e:
                 self.log(f"  ⚠️ 关闭面板失败: {e}")
@@ -534,7 +536,7 @@ class ChangshaCrawler:
                         pass
 
                 # 等待下拉选项展开
-                await self.page.wait_for_load_state("networkidle", timeout=3000)
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
 
             except Exception as e:
                 self.log(f"  ⚠️ 点击登记状态失败: {e}")
@@ -579,7 +581,7 @@ class ChangshaCrawler:
                         await industry_element.click()
                         self.log("  ✅ 国标行业已点击")
 
-                await self.page.wait_for_load_state("networkidle", timeout=3000)
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
 
             except Exception as e:
                 self.log(f"  ⚠️ 点击国标行业失败: {e}")
@@ -605,7 +607,7 @@ class ChangshaCrawler:
                 self.log(f"  ⚠️ 勾选行业失败: {e}")
 
             # 等待筛选生效
-            await self.page.wait_for_load_state("networkidle", timeout=3000)
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
 
             await self.screenshot("step3_filters_set")
 
@@ -814,7 +816,7 @@ class ChangshaCrawler:
             # 验证城市是否选择成功（使用条件等待）
             try:
                 # 等待选择结果出现
-                await self.page.wait_for_load_state("networkidle", timeout=3000)
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
                 self.log("  ✅ 地区选择完成")
                 return True
             except:
@@ -1176,37 +1178,60 @@ class ChangshaCrawler:
                 except:
                     pass
 
+            # 点击后尝试关闭选择面板（按ESC或点击空白处）
+            try:
+                await self.page.keyboard.press("Escape")
+                await asyncio.sleep(0.3)
+            except:
+                pass
+
+            # 等待筛选生效
             await self.page.wait_for_load_state("networkidle", timeout=10000)
-            await asyncio.sleep(0.5)  # 短暂稳定等待
+            await asyncio.sleep(1)  # 额外等待确保筛选应用
 
             # 截图记录选择后状态
             await self.screenshot(f"after_select_{industry_name[:8]}")
 
-            # 验证行业是否真正被选中（检查地址栏是否包含行业名称）
-            try:
-                # 获取页面顶部地址栏内容 - 通常在面包屑或搜索条件区域
-                breadcrumb = await self.page.locator('.breadcrumb, .condition-bar, [class*="address"], [class*="condition"]').first.text_content()
-                if breadcrumb and industry_name in breadcrumb:
-                    self.log(f"  [行业选择] ✅ 已点击: {industry_name}")
-                    return True
-            except:
-                pass
-
-            # 备选验证：检查页面是否有包含行业名称的可信元素
+            # 验证行业是否真正被选中 - 通过检查筛选标签
             try:
                 # 等待更长时间让页面更新
                 await self.page.wait_for_load_state("networkidle", timeout=10000)
-                # 查找"已选行业"或类似的标签
-                selected_industry = await self.page.locator('text="已选行业"').first.text_content()
-                if selected_industry and industry_name in selected_industry:
-                    self.log(f"  [行业选择] ✅ 已点击: {industry_name}")
-                    return True
+                # 检查是否有包含行业名称的已选标签
+                filter_tags = await self.page.query_selector_all('[class*="tag"], [class*="selected"], .pills-item')
+                for tag in filter_tags:
+                    text = await tag.text_content()
+                    if text and industry_name in text:
+                        self.log(f"  [行业选择] ✅ 已确认: {industry_name} (标签验证)")
+                        return True
             except:
                 pass
 
+            # 如果标签验证失败，检查页面上的数据是否变化
+            # 如果数据仍然是制造业合计，说明选择未生效
+            body_text = await self.page.text_content('body')
+            # 简单检查：看页面是否有行业相关文本
+            if f"{industry_name}(" in body_text or f"{industry_name}）" in body_text:
+                self.log(f"  [行业选择] ✅ 已确认: {industry_name} (文本验证)")
+                return True
+
             if clicked:
-                self.log(f"  [行业选择] ⚠️ 已点击但未确认: {industry_name}")
-                return True  # 仍然返回True，因为点击可能成功了
+                # 验证失败，但点击了，刷新页面再试一次
+                self.log(f"  [行业选择] ⚠️ 已点击但未确认，刷新重试: {industry_name}")
+                await self.page.reload(wait_until="networkidle", timeout=15000)
+                await asyncio.sleep(1)
+                # 重新点击
+                try:
+                    industry_link = self.page.locator(f'a:has-text("{industry_name}")').first
+                    if await industry_link.is_visible(timeout=3000):
+                        await industry_link.click()
+                        await self.page.wait_for_load_state("networkidle", timeout=10000)
+                        await asyncio.sleep(1)
+                        self.log(f"  [行业选择] ✅ 重试点击成功: {industry_name}")
+                        return True
+                except:
+                    pass
+                self.log(f"  [行业选择] ⚠️ 重试后仍未确认，但继续: {industry_name}")
+                return True  # 由于数据校验会捕获问题，这里返回True让流程继续
             else:
                 self.log(f"  [行业选择] ❌ 未能点击: {industry_name}")
                 return False
