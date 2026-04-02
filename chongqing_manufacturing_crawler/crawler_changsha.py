@@ -590,10 +590,26 @@ class ChangshaCrawler:
             industry_keyword = getattr(self, 'industry', '制造业')
             self.log(f"  勾选{industry_keyword}...")
             try:
-                industry_option = self.page.get_by_text(industry_keyword, exact=False)
-                if await industry_option.is_visible(timeout=3000):
-                    await industry_option.click()
-                    self.log(f"  ✅ {industry_keyword}已勾选")
+                # 使用更精确的选择器：查找包含"制造业"的checkbox或选项
+                # 首先尝试查找label或选项元素
+                industry_options = self.page.locator(f'text="{industry_keyword}"')
+                count = await industry_options.count()
+
+                if count == 1:
+                    await industry_options.first.click()
+                    self.log(f"  ✅ {industry_keyword}已勾选(精确匹配)")
+                elif count > 1:
+                    # 多个匹配，尝试过滤出纯行业标签
+                    for i in range(count):
+                        text = await industry_options.nth(i).text_content()
+                        if text and text.strip() == industry_keyword:
+                            await industry_options.nth(i).click()
+                            self.log(f"  ✅ {industry_keyword}已勾选(过滤匹配)")
+                            break
+                    else:
+                        # 没找到精确匹配，使用第一个
+                        await industry_options.first.click()
+                        self.log(f"  ⚠️ {industry_keyword}已勾选(使用第一个)")
                 else:
                     # 遍历查找
                     all_industry_items = self.page.locator('[class*="option"], [class*="item"]')
@@ -601,7 +617,7 @@ class ChangshaCrawler:
                         text = await all_industry_items.nth(i).text_content()
                         if text and industry_keyword in text:
                             await all_industry_items.nth(i).click()
-                            self.log(f"  ✅ {industry_keyword}已勾选")
+                            self.log(f"  ✅ {industry_keyword}已勾选(遍历)")
                             break
             except Exception as e:
                 self.log(f"  ⚠️ 勾选行业失败: {e}")
