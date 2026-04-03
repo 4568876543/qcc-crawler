@@ -228,6 +228,7 @@ def run_crawler(config):
     company_status = crawler_config.get('company_status', '存续（在业）')
     industry = crawler_config.get('国标行业', '制造业')
     mode = crawler_config.get('mode', 'new')
+    headless = crawler_config.get('headless', False)
 
     # 构建用户配置
     user_config = {
@@ -235,7 +236,8 @@ def run_crawler(config):
         "search_location": search_location,
         "district_level": district_level,
         "company_status": company_status,
-        "industry": industry
+        "industry": industry,
+        "headless": headless
     }
 
     print(f"\n🚀 开始爬取: {search_location}")

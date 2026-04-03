@@ -119,6 +119,7 @@ class ChangshaCrawler:
         self.keyword = self.user_config["keyword"]
         self.company_status = self.user_config["company_status"]
         self.industry = self.user_config.get("industry", "制造业")  # 国标行业
+        self.headless = self.user_config.get("headless", False)  # 无头模式
 
         # 初始化下级地区列表（从页面动态获取）
         self.districts = []
@@ -189,7 +190,7 @@ class ChangshaCrawler:
             
             self.context = await self.playwright.chromium.launch_persistent_context(
                 user_data_dir,
-                headless=False,
+                headless=self.headless,
                 slow_mo=50,
                 viewport={'width': 1920, 'height': 1080}
             )

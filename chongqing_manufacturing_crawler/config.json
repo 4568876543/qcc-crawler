@@ -21,7 +21,8 @@
         "company_status": "存续（在业）",
 
         "mode": "new",
-        "open_browser": false
+        "open_browser": true,
+        "headless": false
     },
 
     "converter": {
