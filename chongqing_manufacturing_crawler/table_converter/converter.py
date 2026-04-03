@@ -102,7 +102,7 @@ class TableConverter:
 
     def convert(self, output_path: str) -> bool:
         """
-        转换并保存为 Excel 文件
+        转换并保存为 Excel 文件（模仿用户手动修改的格式）
 
         Args:
             output_path: 输出文件路径
@@ -120,29 +120,32 @@ class TableConverter:
             # 确保输出目录存在
             os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
 
-            # 使用 pandas ExcelWriter 写入
-            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                # Sheet1 - 带格式
-                df1 = self.sheet1_generator.generate()
-                df1.to_excel(writer, sheet_name='Sheet1', index=False)
-                workbook = writer.book
+            # 直接使用 Sheet1Generator 生成 Excel（带公式）
+            self.sheet1_generator.to_excel(output_path)
 
-                # 设置Sheet1占比列的百分比格式
-                sheet1 = workbook['Sheet1']
-                for col_idx, col_name in enumerate(df1.columns, 1):
-                    if '占比' in str(col_name):
-                        for row_idx in range(2, len(df1) + 3):
-                            cell = sheet1.cell(row=row_idx, column=col_idx)
-                            if isinstance(cell.value, (int, float)):
-                                cell.number_format = '0.00%'
+            # 重新打开文件添加产业分析图表Sheet
+            from openpyxl import load_workbook
+            wb = load_workbook(output_path)
 
-                # Sheet2 - 数据
-                df2 = self.sheet2_generator.generate()
-                df2.to_excel(writer, sheet_name='Sheet2', index=False)
+            # 计算行业总计（用于产业分析图表）
+            industry_totals = []
+            for industry_code, industry_name in self.sheet2_generator.industry_order:
+                counts = self.sheet2_generator.industry_data.get(industry_name, {})
+                total = sum(counts.values())
+                industry_totals.append((industry_name, total))
 
-                # 为Sheet2添加图表
-                self._add_charts_to_sheet2(workbook)
+            # 按总数降序排序
+            industry_totals.sort(key=lambda x: x[1], reverse=True)
 
+            # 创建"产业分析图表"Sheet
+            if "产业分析图表" in wb.sheetnames:
+                del wb["产业分析图表"]
+            chart_sheet = wb.create_sheet("产业分析图表")
+
+            # 添加产业分析图表数据（不带图片，只有数据）
+            self._add_industry_analysis_data(chart_sheet, industry_totals)
+
+            wb.save(output_path)
             print(f"[转换] 完成！文件已保存到: {output_path}")
             return True
 
@@ -152,28 +155,87 @@ class TableConverter:
             traceback.print_exc()
             return False
 
-    def _add_charts_to_sheet2(self, workbook):
-        """使用通用ChartGenerator添加图表"""
-        ws = workbook['Sheet2']
+    def _add_industry_analysis_data(self, chart_sheet, industry_totals):
+        """
+        添加产业分析图表数据（只有数据，没有图片）
 
-        # 计算每个行业的全市总计
-        industry_totals = []
-        for industry_code, industry_name in self.sheet2_generator.industry_order:
-            counts = self.sheet2_generator.industry_data.get(industry_name, {})
-            total = sum(counts.values())
-            industry_totals.append((industry_name, total))
+        格式：
+        - 第1行: 标题（行业, 企业数量, 占比）
+        - 第2-32行: 31个行业数据（按企业数量降序）
+        - 第33行: 合计行
+        """
+        from openpyxl.styles import Font, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
 
-        # 按总数降序排序
-        industry_totals.sort(key=lambda x: x[1], reverse=True)
+        # 计算总数量
+        total_sum = sum(t[1] for t in industry_totals)
 
-        # 创建"产业分析图表"Sheet
-        if "产业分析图表" in workbook.sheetnames:
-            del workbook["产业分析图表"]
-        chart_sheet = workbook.create_sheet("产业分析图表")
+        # 样式
+        header_font = Font(bold=True, size=11, color="FFFFFF")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        total_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
 
-        # 使用通用ChartGenerator生成图表
-        chart_gen = ChartGenerator(city_name=self.city_name)
-        chart_gen.add_charts_to_sheet(chart_sheet, industry_totals, self.sheet2_generator.industry_data)
+        # 第1行：标题
+        chart_sheet.cell(row=1, column=1, value="行业")
+        chart_sheet.cell(row=1, column=1).font = header_font
+        chart_sheet.cell(row=1, column=1).fill = header_fill
+        chart_sheet.cell(row=1, column=1).border = thin_border
+
+        chart_sheet.cell(row=1, column=2, value="企业数量")
+        chart_sheet.cell(row=1, column=2).font = header_font
+        chart_sheet.cell(row=1, column=2).fill = header_fill
+        chart_sheet.cell(row=1, column=2).border = thin_border
+
+        chart_sheet.cell(row=1, column=3, value="占比")
+        chart_sheet.cell(row=1, column=3).font = header_font
+        chart_sheet.cell(row=1, column=3).fill = header_fill
+        chart_sheet.cell(row=1, column=3).border = thin_border
+
+        # 第2-32行：行业数据
+        for i, (industry_name, total) in enumerate(industry_totals):
+            row = 2 + i
+
+            chart_sheet.cell(row=row, column=1, value=industry_name)
+            chart_sheet.cell(row=row, column=1).border = thin_border
+
+            chart_sheet.cell(row=row, column=2, value=total)
+            chart_sheet.cell(row=row, column=2).border = thin_border
+            chart_sheet.cell(row=row, column=2).number_format = '#,##0'
+
+            # 占比用公式
+            chart_sheet.cell(row=row, column=3, value=f"=B{row}/$B$33")
+            chart_sheet.cell(row=row, column=3).border = thin_border
+            chart_sheet.cell(row=row, column=3).number_format = '0.00%'
+
+        # 第33行：合计行
+        total_row = 2 + len(industry_totals)
+        chart_sheet.cell(row=total_row, column=1, value="合计")
+        chart_sheet.cell(row=total_row, column=1).font = Font(bold=True)
+        chart_sheet.cell(row=total_row, column=1).fill = total_fill
+        chart_sheet.cell(row=total_row, column=1).border = thin_border
+
+        chart_sheet.cell(row=total_row, column=2, value=f"=SUM(B2:B{total_row-1})")
+        chart_sheet.cell(row=total_row, column=2).font = Font(bold=True)
+        chart_sheet.cell(row=total_row, column=2).fill = total_fill
+        chart_sheet.cell(row=total_row, column=2).border = thin_border
+        chart_sheet.cell(row=total_row, column=2).number_format = '#,##0'
+
+        chart_sheet.cell(row=total_row, column=3, value=f"=B{total_row}/$B${total_row}")
+        chart_sheet.cell(row=total_row, column=3).font = Font(bold=True)
+        chart_sheet.cell(row=total_row, column=3).fill = total_fill
+        chart_sheet.cell(row=total_row, column=3).border = thin_border
+        chart_sheet.cell(row=total_row, column=3).number_format = '0.00%'
+
+        # 设置列宽
+        chart_sheet.column_dimensions['A'].width = 35
+        chart_sheet.column_dimensions['B'].width = 15
+        chart_sheet.column_dimensions['C'].width = 12
 
     def validate(self) -> dict:
         """

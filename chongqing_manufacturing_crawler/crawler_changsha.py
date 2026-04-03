@@ -52,6 +52,37 @@ from utils.data_validator import DataValidator
 
 COOKIE_FILE = "data/qcc_cookies.json"
 
+# 地区类型后缀白名单（用于识别合法的行政区划单位）
+# 按长度降序排列，确保长后缀优先匹配（如"民族乡"先于"乡"匹配）
+DISTRICT_SUFFIXES = sorted([
+    # 乡级（4个字符）
+    '民族乡', '民族苏木',
+    # 乡级（2-3个字符）
+    '街道', '镇', '乡', '苏木',
+    # 县级（3个字符）
+    '自治旗', '自治县', '旗', '特区', '林区',
+    # 县级（2个字符）
+    '县', '区',
+    # 县级的市辖区特殊处理
+    '市辖区',
+    # 地级（3个字符）
+    '自治州',
+    # 地级（2个字符）
+    '地区', '地级市', '盟', '市', '州',
+    # 省级（3-4个字符）
+    '特别行政区', '自治区', '直辖市', '省',
+    # 特殊区域
+    '开发区', '新区', '高新区', '工业园区'
+], key=len, reverse=True)
+
+
+def is_district_name(name: str) -> bool:
+    """检查名称是否是合法的行政区划名称"""
+    for suffix in DISTRICT_SUFFIXES:
+        if name.endswith(suffix):
+            return True
+    return False
+
 
 class ChangshaCrawler:
     """企查查行业搜索爬虫"""
@@ -173,6 +204,11 @@ class ChangshaCrawler:
         
         self.page.set_default_timeout(TIMEOUT)
         self.log("浏览器启动完成")
+
+        # 尝试加载保存的Cookie
+        if os.path.exists(COOKIE_FILE):
+            await self.load_cookies()
+            self.log("[Cookie] 已尝试加载本地Cookie")
     
     async def save_cookies(self):
         """保存当前cookie到文件"""
@@ -190,7 +226,12 @@ class ChangshaCrawler:
         try:
             if os.path.exists(COOKIE_FILE):
                 with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-                    cookies = json.load(f)
+                    data = json.load(f)
+                    # 支持两种格式：{"cookies": [...]} 或直接是 [...]
+                    if isinstance(data, dict) and 'cookies' in data:
+                        cookies = data['cookies']
+                    else:
+                        cookies = data
                 await self.context.add_cookies(cookies)
                 self.log(f"[Cookie] 已加载 {len(cookies)} 个cookie")
                 return True
@@ -301,7 +342,11 @@ class ChangshaCrawler:
     async def check_login(self):
         """检查登录状态 - 改进版：检查是否有登录按钮或二维码"""
         try:
-            # 检查是否有登录按钮或登录链接
+            # 首先检查URL是否跳转到登录页
+            if 'login' in self.page.url.lower():
+                return False
+
+            # 检查是否有登录按钮或登录链接（表示未登录）
             login_indicators = [
                 self.page.locator('button:has-text("登录")'),
                 self.page.locator('a:has-text("登录")'),
@@ -309,36 +354,52 @@ class ChangshaCrawler:
                 self.page.locator('text=扫码登录'),
                 self.page.locator('[class*="qrcode"]'),
                 self.page.locator('[class*="login-modal"]'),
+                self.page.locator('[class*="login-dialog"]'),
             ]
-            
+
             for locator in login_indicators:
                 try:
                     if await locator.first.is_visible(timeout=1000):
-                        return False  # 未登录
+                        return False  # 发现了登录相关的元素，说明未登录
                 except:
                     pass
-            
+
+            # 检查页面文本内容，看是否包含"请登录"或"扫码登录"等文本
+            try:
+                page_content = await self.page.content()
+                if '请登录' in page_content or '扫码登录' in page_content or '登录企查查' in page_content:
+                    return False  # 页面包含登录提示文字，说明未登录
+            except:
+                pass
+
             # 检查是否有用户头像或用户名（已登录状态）
             logged_in_indicators = [
                 self.page.locator('[class*="user-info"]'),
                 self.page.locator('[class*="avatar"]'),
                 self.page.locator('[class*="member"]'),
+                self.page.locator('[class*="user-name"]'),
+                self.page.locator('[class*="nickname"]'),
             ]
-            
+
             for locator in logged_in_indicators:
                 try:
                     if await locator.first.is_visible(timeout=1000):
-                        return True  # 已登录
+                        return True  # 发现了用户信息，说明已登录
                 except:
                     pass
-            
-            # 默认检查URL是否包含login
-            if 'login' in self.page.url.lower():
-                return False
-                
-            return True
+
+            # 如果以上都没有明确结果，尝试检查是否有登录二维码图片
+            try:
+                qr_code = self.page.locator('img[src*="qrcode"], [class*="qrcode"] img')
+                if await qr_code.first.is_visible(timeout=1000):
+                    return False  # 发现二维码，说明未登录
+            except:
+                pass
+
+            # 默认返回False（未登录），除非明确检测到已登录状态
+            return False
         except:
-            return True
+            return False
     
     async def close_popups(self):
         """关闭各种弹窗"""
@@ -485,16 +546,27 @@ class ChangshaCrawler:
                 # 先关闭遮罩层
                 try:
                     await self.page.evaluate('''() => {
-                        const mask = document.querySelector('.expanded-mask, [class*="mask"]');
-                        if (mask) mask.style.display = 'none';
+                        const masks = document.querySelectorAll('.expanded-mask, [class*="mask"], .mask, .el-overlay');
+                        masks.forEach(m => m.style.display = 'none');
                     }''')
                 except:
                     pass
 
-                more_btn = self.page.get_by_role("link", name="更多")
-                if await more_btn.is_visible(timeout=3000):
-                    await more_btn.click(force=True)
+                # 使用 JavaScript 直接点击，避免被遮罩阻挡
+                clicked = await self.page.evaluate('''() => {
+                    const moreLinks = Array.from(document.querySelectorAll('a, button, span'));
+                    for (const el of moreLinks) {
+                        if (el.textContent.trim() === '更多') {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }''')
+                if clicked:
                     self.log("  ✅ 已点击更多")
+                else:
+                    self.log("  ⚠️ 未找到更多按钮")
             except Exception as e:
                 self.log(f"  ⚠️ 点击更多失败: {e}")
 
@@ -1043,31 +1115,60 @@ class ChangshaCrawler:
             return False
     
     async def get_district_distribution(self):
-        """获取区县分布数据"""
+        """获取区县分布数据 - 使用DOM选择器获取地区列表"""
         try:
             await self.page.wait_for_load_state("networkidle", timeout=10000)
             await asyncio.sleep(0.5)  # 短暂稳定等待
-            body_text = await self.page.text_content('body')
-            
+
             district_data = {}
-            pattern = r'([\u4e00-\u9fa5]+[区县市]|[\u4e00-\u9fa5]+开发区|[\u4e00-\u9fa5]+新区)\s*[\(（]([\d,]+)[\)）]'
-            matches = re.findall(pattern, body_text)
-            
-            for match in matches:
-                district = match[0]
-                count = int(match[1].replace(',', ''))
-                district_data[district] = count
-            
+
+            # 方法1: 使用a.pills-item选择器获取地区列表（最可靠）
+            pills = await self.page.query_selector_all("a.pills-item")
+            if pills:
+                for pill in pills:
+                    text = await pill.text_content()
+                    if text and '(' in text:
+                        # 格式: "长沙市(12345)" 或 "湘西土家族苗族自治州(2867)"
+                        match = re.match(r'([\u4e00-\u9fa5]+)\(([\d,]+)\)', text.strip())
+                        if match:
+                            name = match.group(1)
+                            count = int(match.group(2).replace(',', ''))
+                            # 使用标准行政区划后缀白名单过滤
+                            if is_district_name(name):
+                                district_data[name] = count
+
             if district_data:
                 self.log(f"  获取到 {len(district_data)} 个区县")
                 for d, c in list(district_data.items())[:5]:
                     self.log(f"    {d}: {c}")
+
+                # 保存地区列表到JSON供后续比对
+                district_list_file = os.path.join(self.output_dir, "district_list.json")
+                with open(district_list_file, 'w', encoding='utf-8') as f:
+                    json.dump(district_data, f, ensure_ascii=False, indent=2)
+                self.log(f"  地区列表已保存: {district_list_file}")
+
+                return district_data
+
+            # 方法2: 回退到正则表达式
+            self.log("  选择器未获取到，使用正则表达式...")
+            body_text = await self.page.text_content('body')
+            pattern = r'([\u4e00-\u9fa5]+[区县市州]|[\u4e00-\u9fa5]+开发区|[\u4e00-\u9fa5]+新区)\s*[\(（]([\d,]+)[\)）]'
+            matches = re.findall(pattern, body_text)
+
+            for match in matches:
+                district = match[0]
+                count = int(match[1].replace(',', ''))
+                district_data[district] = count
+
+            if district_data:
+                self.log(f"  获取到 {len(district_data)} 个区县")
                 return district_data
             else:
                 self.log("  未获取到区县数据")
                 await self.screenshot("no_district_data")
                 return {}
-                
+
         except Exception as e:
             self.log(f"获取区县分布失败: {e}")
             return {}
@@ -1161,45 +1262,90 @@ class ChangshaCrawler:
             # 行业列表中的项通常是 <a> 或 <span> 标签
             clicked = False
             
-            # 方法1: 尝试点击行业列表中的链接
+            # 方法1: 尝试点击行业列表中的链接（排除高级搜索链接）
             try:
-                industry_link = self.page.locator(f'a:has-text("{industry_name}")').first
-                if await industry_link.is_visible(timeout=2000):
-                    await industry_link.click()
-                    clicked = True
-                    self.log(f"  [行业选择] 方式1: 点击a标签成功")
+                all_links = self.page.locator(f'a:has-text("{industry_name}")')
+                count = await all_links.count()
+                for i in range(count):
+                    link = all_links.nth(i)
+                    if not await link.is_visible():
+                        continue
+                    href = await link.get_attribute('href') or ''
+                    # 排除高级搜索链接（URL包含advance或adv）
+                    if 'advance' in href.lower():
+                        continue
+                    text = await link.text_content() or ''
+                    # 精确匹配行业名称
+                    if industry_name in text:
+                        await link.click()
+                        clicked = True
+                        self.log(f"  [行业选择] 方式1: 点击a标签成功")
+                        break
             except:
                 pass
-            
+
             # 方法2: 尝试点击span
             if not clicked:
                 try:
-                    industry_span = self.page.locator(f'span:has-text("{industry_name}")').first
-                    if await industry_span.is_visible(timeout=1000):
-                        await industry_span.click()
-                        clicked = True
-                        self.log(f"  [行业选择] 方式2: 点击span标签成功")
+                    all_spans = self.page.locator(f'span:has-text("{industry_name}")')
+                    count = await all_spans.count()
+                    for i in range(count):
+                        span = all_spans.nth(i)
+                        if not await span.is_visible():
+                            continue
+                        # 检查父级链接
+                        parent_link = await span.query_selector('xpath=..')
+                        if parent_link:
+                            href = await parent_link.get_attribute('href') or ''
+                            if 'advance' in href.lower():
+                                continue
+                        text = await span.text_content() or ''
+                        if industry_name in text:
+                            await span.click()
+                            clicked = True
+                            self.log(f"  [行业选择] 方式2: 点击span标签成功")
+                            break
                 except:
                     pass
-            
-            # 方法3: 使用getByRole
+
+            # 方法3: 使用getByRole（排除高级搜索）
             if not clicked:
                 try:
-                    industry_item = self.page.get_by_role("link", name=industry_name).first
-                    if await industry_item.is_visible(timeout=1000):
-                        await industry_item.click()
+                    all_items = self.page.get_by_role("link", name=industry_name)
+                    count = await all_items.count()
+                    for i in range(count):
+                        item = all_items.nth(i)
+                        if not await item.is_visible():
+                            continue
+                        href = await item.get_attribute('href') or ''
+                        if 'advance' in href.lower():
+                            continue
+                        await item.click()
                         clicked = True
                         self.log(f"  [行业选择] 方式3: 点击link角色成功")
+                        break
                 except:
                     pass
-            
+
             # 方法4: 使用getByText
             if not clicked:
                 try:
-                    industry_text = self.page.get_by_text(industry_name, exact=True).first
-                    await industry_text.click()
-                    clicked = True
-                    self.log(f"  [行业选择] 方式4: 点击文本成功")
+                    all_texts = self.page.get_by_text(industry_name, exact=True)
+                    count = await all_texts.count()
+                    for i in range(count):
+                        elem = all_texts.nth(i)
+                        if not await elem.is_visible():
+                            continue
+                        # 检查是否是链接且非高级搜索
+                        tag = await elem.evaluate('el => el.tagName')
+                        if tag == 'A':
+                            href = await elem.get_attribute('href') or ''
+                            if 'advance' in href.lower():
+                                continue
+                        await elem.click()
+                        clicked = True
+                        self.log(f"  [行业选择] 方式4: 点击文本成功")
+                        break
                 except:
                     pass
 
@@ -1479,27 +1625,46 @@ class ChangshaCrawler:
                     industry_total = sum(district_data.values())
 
                     # ====== 数据合理性校验 ======
-                    # 如果某行业数据接近制造业合计（>90%），说明行业选择可能未生效
+                    # 检查1: 如果某行业数据接近制造业合计（>90%），说明行业选择可能未生效
+                    # 检查2: 如果某区县的本行业数据超过该区县的制造业数据，说明行业选择未生效
                     if hasattr(self, 'city_total_data') and self.city_total_data:
                         city_total = sum(self.city_total_data.values())
+                        retry_needed = False
+                        retry_reason = ""
+
+                        # 检查1: 总量比例检查
                         if city_total > 0 and industry_total > 0:
                             ratio = industry_total / city_total
                             if ratio > 0.9:
-                                self.log(f"  ⚠️ 警告: {industry_name} 数据 ({industry_total}) 接近制造业合计 ({city_total})")
-                                self.log(f"  ⚠️ 比例: {ratio*100:.1f}%，行业选择可能未生效！")
-                                await self.screenshot(f"WARNING_{industry_code}_data_anomaly")
-                                # 重试一次：先取消选择，再重新点击
-                                self.log(f"  重试行业选择...")
-                                await self.deselect_industry(industry_name)
-                                await self.page.wait_for_timeout(1000)
-                                if not await self.click_industry(industry_name):
-                                    self.log(f"  ❌ 重试失败，跳过该行业")
-                                    self.task_manager.fail_industry(industry_code, "行业选择数据异常")
-                                    return False
-                                # 重新获取数据
-                                district_data = await self.get_district_distribution()
-                                industry_total = sum(district_data.values()) if district_data else 0
-                                self.log(f"  重试后数据: {industry_total} 家企业")
+                                retry_reason = f"总量异常: {industry_name} 数据 ({industry_total}) 接近制造业合计 ({city_total})"
+                                retry_needed = True
+
+                        # 检查2: 每个区县的行业数据不应超过该区县制造业数据的1.02倍（允许2%误差）
+                        # 注意：ratio < 0.98 不需要检查，因为子行业数据小于制造业是正常的
+                        if not retry_needed and district_data:
+                            for district, count in district_data.items():
+                                city_count = self.city_total_data.get(district, 0)
+                                if city_count > 0 and count > city_count * 1.02:
+                                    retry_reason = f"区县异常: {district} {industry_name}={count} > 制造业={city_count} (×1.02)"
+                                    retry_needed = True
+                                    break
+
+                        if retry_needed:
+                            self.log(f"  ⚠️ 警告: {retry_reason}")
+                            self.log(f"  ⚠️ 行业选择可能未生效！")
+                            await self.screenshot(f"WARNING_{industry_code}_data_anomaly")
+                            # 重试一次：先取消选择，再重新点击
+                            self.log(f"  重试行业选择...")
+                            await self.deselect_industry(industry_name)
+                            await self.page.wait_for_timeout(1000)
+                            if not await self.click_industry(industry_name):
+                                self.log(f"  ❌ 重试失败，跳过该行业")
+                                self.task_manager.fail_industry(industry_code, "行业选择数据异常")
+                                return False
+                            # 重新获取数据
+                            district_data = await self.get_district_distribution()
+                            industry_total = sum(district_data.values()) if district_data else 0
+                            self.log(f"  重试后数据: {industry_total} 家企业")
 
                     for district, count in district_data.items():
                         self.data.append({

@@ -53,73 +53,147 @@ def print_banner():
 
 
 async def save_cookie():
-    """保存Cookie"""
+    """保存Cookie - 扫码登录企查查并保存登录状态（使用持久化上下文）"""
     from playwright.async_api import async_playwright
     import json
+    import os
 
-    COOKIE_FILE = "data/qcc_cookies.json"
+    BROWSER_PROFILE = "data/browser_profile"
 
     print("\n" + "=" * 60)
     print("【Cookie登录管理】")
     print("=" * 60)
 
     print("\n🔐 开始登录流程...")
-    print("   将打开浏览器，请扫码或输入账号密码登录")
-    print("   登录成功后，Cookie将自动保存")
+    print("   将打开浏览器，请使用微信/支付宝扫码登录")
+    print("   登录成功后，Cookie将自动保存到本地")
     print("   按 Ctrl+C 可取消登录\n")
 
-    try:
-        input("   按回车键继续打开浏览器...")
+    login_success = False
+    context = None
 
+    try:
         async with async_playwright() as p:
-            # 启动浏览器
-            browser = await p.chromium.launch(headless=False)
-            context = await browser.new_context()
-            page = await context.new_page()
+            # 使用持久化上下文，与爬虫保持一致
+            user_data_dir = os.path.abspath(BROWSER_PROFILE)
+            os.makedirs(user_data_dir, exist_ok=True)
+
+            print("   正在启动浏览器...")
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir,
+                headless=False,
+                slow_mo=50,
+                viewport={'width': 1280, 'height': 800}
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
 
             # 访问企查查
-            print("\n   正在打开企查查网站...")
-            await page.goto("https://www.qcc.com", wait_until="networkidle", timeout=60000)
+            print("   正在打开企查查网站...")
+            await page.goto("https://www.qcc.com", wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2000)
 
-            # 等待用户登录
-            print("\n" + "=" * 40)
-            print("   ⚠️ 请在浏览器中扫码或登录")
-            print("   ⚠️ 登录成功后，点击任意页面确保登录状态生效")
-            print("   ⚠️ 确认登录后，回到此窗口按回车键保存Cookie")
-            print("=" * 40)
+            # 尝试点击右上角登录按钮
+            print("   正在触发登录界面...")
 
-            input("\n   登录成功后，按回车键保存Cookie...")
+            login_clicked = False
+            selectors = [
+                "a[data-litbcon='登录']",
+                ".login-btn",
+                ".header-login-btn",
+                "a[href*='login']",
+            ]
 
-            # 获取Cookie
-            cookies = await context.cookies()
+            for selector in selectors:
+                try:
+                    elements = await page.query_selector_all(selector)
+                    for el in elements:
+                        try:
+                            if await el.is_visible():
+                                await el.click(timeout=2000)
+                                print(f"   ✅ 点击登录按钮: {selector}")
+                                login_clicked = True
+                                await page.wait_for_timeout(1500)
+                                break
+                        except:
+                            continue
+                    if login_clicked:
+                        break
+                except:
+                    continue
 
-            if cookies:
-                # 保存Cookie
-                os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
-                cookie_data = {
-                    "cookies": cookies,
-                    "save_time": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(cookie_data, f, ensure_ascii=False, indent=2)
+            # JavaScript触发
+            if not login_clicked:
+                print("   🔄 尝试使用JavaScript触发登录...")
+                try:
+                    await page.evaluate('''() => {
+                        const event = new MouseEvent('click', { bubbles: true });
+                        document.querySelectorAll('.login-btn, .sign-in, a, button').forEach(el => {
+                            if (el.textContent.includes('登录') && el.offsetParent !== null) {
+                                el.dispatchEvent(event);
+                            }
+                        });
+                    }''')
+                    await page.wait_for_timeout(1500)
+                except Exception as e:
+                    print(f"   ⚠️ JS触发失败: {e}")
 
-                print(f"\n   ✅ Cookie已保存到: {COOKIE_FILE}")
-                print(f"   📊 共保存 {len(cookies)} 个Cookie")
+            # 等待扫码登录
+            print("\n" + "=" * 50)
+            print("   📱 请在浏览器中扫码登录")
+            print("=" * 50)
+
+            print("\n   ✅ 扫码完成后，在此窗口按回车确认保存Cookie")
+            print("   ⚠️ 如果想取消，请按 Ctrl+C")
+
+            try:
+                user_input = input()
+            except EOFError:
+                print("   ⏳ 非交互模式，等待60秒...")
+                await page.wait_for_timeout(60000)
+
+            # 用户确认后，验证登录状态
+            print("\n   🔍 正在验证登录状态...")
+            await page.goto("https://www.qcc.com", wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
+
+            page_text = await page.inner_text('body')
+            if '登录 | 注册' in page_text or '登录/注册' in page_text:
+                print("   ⚠️ 页面仍显示登录按钮，登录可能未成功")
+                login_success = False
             else:
-                print("\n   ❌ 未获取到Cookie，登录可能失败")
+                print("   ✅ 页面显示已登录状态")
+                login_success = True
 
-            await browser.close()
+            # 关闭浏览器（持久化上下文会自动保存Cookie）
+            print("\n   💾 正在保存Cookie到本地...")
+            await context.close()
+
+            if login_success:
+                print("   ✅ Cookie已保存到浏览器配置目录")
+                print("   📁 目录: data/browser_profile")
+            else:
+                print("   ⚠️ Cookie可能未正确保存，建议重新登录")
 
     except KeyboardInterrupt:
         print("\n\n   已取消登录")
+        if context:
+            try:
+                await context.close()
+            except:
+                pass
         return False
     except Exception as e:
         print(f"\n   ❌ 登录过程出错: {e}")
         import traceback
         traceback.print_exc()
+        if context:
+            try:
+                await context.close()
+            except:
+                pass
         return False
 
-    return True
+    return login_success
 
 
 def print_menu():
