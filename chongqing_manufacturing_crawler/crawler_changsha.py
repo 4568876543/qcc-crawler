@@ -238,7 +238,29 @@ class ChangshaCrawler:
         except Exception as e:
             self.log(f"[Cookie] 加载失败: {e}")
         return False
-    
+
+    async def close_advance_tabs(self):
+        """关闭所有包含'advance'的标签页，避免浏览器崩溃"""
+        try:
+            if not self.context.pages:
+                return
+            closed = []
+            for page in self.context.pages[:]:  # 使用切片复制避免迭代时修改
+                try:
+                    url = page.url
+                    if url and 'advance' in url.lower():
+                        # 跳过当前页面
+                        if page == self.page:
+                            continue
+                        await page.close()
+                        closed.append(url[:80])
+                except Exception as e:
+                    pass
+            if closed:
+                self.log(f"[标签页] 已关闭 {len(closed)} 个advance标签: {', '.join([u[:50]+'...' if len(u)>50 else u for u in closed[:3]])}")
+        except Exception as e:
+            pass
+
     async def screenshot(self, name: str):
         """截图保存"""
         try:
@@ -449,7 +471,10 @@ class ChangshaCrawler:
 
             # 尝试关闭弹窗
             await self.close_popups()
-            
+
+            # 关闭意外的advance标签页
+            await self.close_advance_tabs()
+
             # 检查登录状态
             if not await self.check_login():
                 self.log("=" * 50)
@@ -513,7 +538,10 @@ class ChangshaCrawler:
 
             # 关闭搜索结果页可能出现的弹窗
             await self.close_popups()
-            
+
+            # 关闭意外的advance标签页
+            await self.close_advance_tabs()
+
             self.log(f"当前页面: {self.page.url}")
             await self.screenshot("step2_search_result")
             
@@ -1363,6 +1391,9 @@ class ChangshaCrawler:
             # 截图记录选择后状态
             await self.screenshot(f"after_select_{industry_name[:8]}")
 
+            # 关闭意外的advance标签页，避免浏览器崩溃
+            await self.close_advance_tabs()
+
             # 验证行业是否真正被选中 - 通过检查筛选标签
             try:
                 # 等待更长时间让页面更新
@@ -1397,6 +1428,8 @@ class ChangshaCrawler:
                         await industry_link.click()
                         await self.page.wait_for_load_state("networkidle", timeout=10000)
                         await asyncio.sleep(1)
+                        # 关闭意外的advance标签页
+                        await self.close_advance_tabs()
                         self.log(f"  [行业选择] ✅ 重试点击成功: {industry_name}")
                         return True
                 except:
@@ -1870,6 +1903,9 @@ class ChangshaCrawler:
                     if not await self.setup_filters():
                         self.log("❌ 重启后设置筛选条件失败")
                         return False
+
+                    # 关闭重启后可能出现的advance标签页
+                    await self.close_advance_tabs()
 
                     self.log("浏览器重启完成，继续爬取...")
                     
