@@ -614,10 +614,13 @@ class ChangshaCrawler:
                 # 优先尝试按 Escape（这是最可靠的方式）
                 await self.page.keyboard.press("Escape")
                 # 等待面板关闭
-                await self.page.wait_for_load_state("networkidle", timeout=10000)
+                await asyncio.sleep(0.5)
                 self.log("  ✅ 面板已关闭")
             except Exception as e:
                 self.log(f"  ⚠️ 关闭面板失败: {e}")
+
+            # 截图记录状态
+            await self.screenshot("before_status_select")
 
             # 5. 点击登记状态下拉框 - 使用 Playwright 语义化选择器
             self.log("  点击登记状态下拉框...")
